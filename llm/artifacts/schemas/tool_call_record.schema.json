@@ -1,0 +1,41 @@
+{
+  "type": "object",
+  "required": [
+    "id",
+    "user_utterance",
+    "tool_call",
+    "assistant_final"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "user_utterance": {
+      "type": "string"
+    },
+    "assistant_final": {
+      "type": "string"
+    },
+    "intent": {
+      "type": "string"
+    },
+    "language_style": {
+      "type": "string"
+    },
+    "tool_call": {
+      "type": "object",
+      "required": [
+        "name",
+        "arguments"
+      ],
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "arguments": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}

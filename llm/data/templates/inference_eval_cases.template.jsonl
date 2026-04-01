@@ -1,0 +1,1 @@
+{"id":"case_id","input":"نص طلب الحريف","expected_intent":"order_tracking","expected_slots":{"order_id":"ORD-ABC12345"},"expected_tool":"track_order","expected_human_review":false,"reference_responses":["أكيد، نثبتلك في حالة الكوموند متاعك."],"required_response_keywords":["نثبت"],"forbidden_response_keywords":["لا أعرف"]}

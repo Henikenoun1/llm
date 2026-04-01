@@ -1,0 +1,30 @@
+{
+  "type": "object",
+  "required": [
+    "id",
+    "prompt",
+    "chosen",
+    "rejected",
+    "reason_tags"
+  ],
+  "properties": {
+    "id": {
+      "type": "string"
+    },
+    "prompt": {
+      "type": "string"
+    },
+    "chosen": {
+      "type": "string"
+    },
+    "rejected": {
+      "type": "string"
+    },
+    "reason_tags": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+.venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+node_modules/
+*.egg-info/
+.angular/
+.vscode/
+artifacts/cache/
+artifacts/exports/
+artifacts/model/
+artifacts/checkpoints/
+artifacts/adapters/*/adapter_model.safetensors
+*.pt
+*.safetensors
+reports/run.log

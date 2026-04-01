@@ -1,0 +1,6 @@
+store_id,city,store_name,hours_weekday,hours_sat,hours_sun,phone_store
+TN-TUN-01,Tunis,OptiTounes Lafayette,09:00-18:00,09:00-13:00,fermé,+216 71 000 001
+TN-SFX-01,Sfax,OptiTounes Sfax Centre,09:00-17:30,09:00-13:00,fermé,+216 74 000 002
+TN-SUS-01,Sousse,OptiTounes Sousse Mall,10:00-20:00,10:00-18:00,10:00-14:00,+216 73 000 003
+TN-ARI-01,Ariana,OptiTounes Ariana,09:30-18:30,09:30-13:30,fermé,+216 70 000 004
+TN-NAB-01,Nabeul,OptiTounes Nabeul,09:00-17:00,09:00-12:30,fermé,+216 72 000 005

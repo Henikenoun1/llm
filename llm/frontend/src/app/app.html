@@ -1,0 +1,116 @@
+<div class="shell">
+  <header class="topbar">
+    <div>
+      <h1>{{ health()?.domain?.organization || 'Call Center LLM' }}</h1>
+      <p>{{ health()?.domain?.assistant_name || 'Assistant' }} • {{ health()?.domain?.name || 'Configurable domain' }}</p>
+    </div>
+
+    <div class="topbar-actions">
+      <div class="status" [class.online]="backendOnline()">
+        <span class="dot"></span>
+        <span>{{ backendOnline() ? 'Backend online' : 'Backend offline' }}</span>
+      </div>
+
+      <div class="variant-switch">
+        <button type="button" [class.active]="selectedVariant() === 'prod'" (click)="setVariant('prod')">Prod</button>
+        <button type="button" [class.active]="selectedVariant() === 'dpo'" (click)="setVariant('dpo')">DPO</button>
+      </div>
+
+      <div class="variant-switch">
+        <button type="button" [class.active]="selectedRuntimeMode() === 'collect_execute'" (click)="setRuntimeMode('collect_execute')">Collect</button>
+        <button type="button" [class.active]="selectedRuntimeMode() === 'speak'" (click)="setRuntimeMode('speak')">Speak</button>
+        <button type="button" [class.active]="selectedRuntimeMode() === 'autonomous'" (click)="setRuntimeMode('autonomous')">Auto</button>
+      </div>
+
+      <button type="button" class="ghost" (click)="refreshRuntime()">Refresh</button>
+      <button type="button" class="ghost" (click)="toggleDebug()">Debug</button>
+      <button type="button" class="ghost" (click)="clearChat()">Reset</button>
+    </div>
+  </header>
+
+  <main class="content">
+    <section class="chat-panel">
+      @if (messages().length === 0) {
+        <div class="welcome">
+          <h2>Pipeline prod configurable</h2>
+          <p>
+            Cette interface envoie les messages vers la variante
+            <strong>{{ selectedVariant() }}</strong> en mode
+            <strong>{{ selectedRuntimeMode() }}</strong>.
+          </p>
+          <div class="suggestions">
+            @for (suggestion of suggestions; track suggestion) {
+              <button type="button" (click)="send(suggestion)">{{ suggestion }}</button>
+            }
+          </div>
+        </div>
+      }
+
+      @if (messages().length > 0) {
+        <div class="messages" #chatContainer>
+          @for (message of messages(); track message.timestamp) {
+            <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
+              <button type="button" class="bubble" (click)="selectMessage(message)">
+                <div class="text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
+                @if (message.meta) {
+                  <div class="meta">
+                    <span>{{ message.meta.intent }}</span>
+                    <span>{{ message.meta.modelVariant }}</span>
+                    <span>{{ message.meta.runtimeMode }}</span>
+                    @if (message.meta.needsHumanReview) {
+                      <span>review</span>
+                    }
+                    @if (message.meta.correctionApplied) {
+                      <span>admin-fix</span>
+                    }
+                    <span>{{ message.meta.latencyMs }} ms</span>
+                  </div>
+                }
+              </button>
+            </article>
+          }
+
+          @if (isLoading()) {
+            <article class="message assistant">
+              <div class="bubble loading">Le modele prepare une reponse...</div>
+            </article>
+          }
+        </div>
+      }
+
+      <div class="composer">
+        <textarea
+          [(ngModel)]="inputText"
+          [disabled]="isLoading()"
+          (keydown)="onKeyDown($event)"
+          placeholder="Ecrire ici..."
+          rows="2"
+        ></textarea>
+        <button type="button" class="send" (click)="send()" [disabled]="isLoading() || !inputText.trim()">
+          Envoyer
+        </button>
+      </div>
+    </section>
+
+    @if (showDebug()) {
+      <aside class="debug-panel">
+        <section class="card">
+          <h3>Runtime</h3>
+          <pre>{{ formatJson(health()) }}</pre>
+        </section>
+
+        <section class="card">
+          <h3>Models</h3>
+          <pre>{{ formatJson(models()) }}</pre>
+        </section>
+
+        @if (selectedMessage()?.meta) {
+          <section class="card">
+            <h3>Message Meta</h3>
+            <pre>{{ formatJson(selectedMessage()?.meta) }}</pre>
+          </section>
+        }
+      </aside>
+    }
+  </main>
+</div>

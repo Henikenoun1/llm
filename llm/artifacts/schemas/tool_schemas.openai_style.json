@@ -1,0 +1,157 @@
+[
+  {
+    "type": "function",
+    "function": {
+      "name": "get_price",
+      "description": "Get grounded lens price from KB/tool.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "product",
+          "index"
+        ],
+        "properties": {
+          "product": {
+            "type": "string"
+          },
+          "index": {
+            "type": "string"
+          },
+          "coating": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "track_order",
+      "description": "Track order by reference.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "order_id"
+        ],
+        "properties": {
+          "order_id": {
+            "type": "string"
+          },
+          "phone": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "create_order",
+      "description": "Create order request.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "product",
+          "index",
+          "city",
+          "phone"
+        ],
+        "properties": {
+          "product": {
+            "type": "string"
+          },
+          "index": {
+            "type": "string"
+          },
+          "coating": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "city": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "book_appointment",
+      "description": "Book appointment slot.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "city",
+          "date",
+          "time_slot",
+          "phone"
+        ],
+        "properties": {
+          "city": {
+            "type": "string"
+          },
+          "date": {
+            "type": "string"
+          },
+          "time_slot": {
+            "type": "string"
+          },
+          "phone": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  {
+    "type": "function",
+    "function": {
+      "name": "handoff_human",
+      "description": "Escalate to a human agent.",
+      "parameters": {
+        "type": "object",
+        "required": [
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "priority": {
+            "type": "string",
+            "enum": [
+              "low",
+              "normal",
+              "high"
+            ]
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  }
+]

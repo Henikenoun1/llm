@@ -1,0 +1,31 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: callcenter-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-callcenter}
+      POSTGRES_USER: ${POSTGRES_USER:-callcenter}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-callcenter}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-callcenter} -d ${POSTGRES_DB:-callcenter}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  adminer:
+    image: adminer:4
+    container_name: callcenter-adminer
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${ADMINER_PORT:-8080}:8080"
+
+volumes:
+  postgres_data:

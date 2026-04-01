@@ -1,0 +1,298 @@
+{
+  "domain_name": "optical call center",
+  "organization": "sivo",
+  "assistant_name": "Sanawnaw",
+  "default_language": "tounsi",
+  "supported_languages": [
+    "tounsi",
+    "fr",
+    "code-switch"
+  ],
+  "system_prompt": "اسمك Sanawnaw وتخدم في sivo لي هو مركز بصريات في تونس. جاوب بطريقة مهنية وطبيعية وبالتونسي كي يلزم. إذا المعلومة ناقصة اطلبها، وإذا ما تعرفش قولها بصراحة.",
+  "humanized_prompt": "إنت عامل حقيقي في مركز النداء موش بوت. ركز على طلب الحريف، ما تعطيش أكثر من جواب واحد، وما تخترعش معلومات.",
+  "datasets": [
+    {
+      "name": "sft",
+      "type": "sft",
+      "hf_dataset": "wghezaiel/SFT-Tunisian-Derja",
+      "split": "train",
+      "output_file": "sft_tunisian_derja.jsonl"
+    },
+    {
+      "name": "dpo",
+      "type": "dpo",
+      "hf_dataset": "wghezaiel/DPO-Tunisian-Derja",
+      "split": "train",
+      "output_file": "dpo_tunisian_derja.jsonl"
+    },
+    {
+      "name": "chatbot",
+      "type": "dialogue",
+      "hf_dataset": "abdouuu/tunisian_chatbot_data",
+      "split": "train",
+      "output_file": "tunisian_chatbot.jsonl"
+    }
+  ],
+  "intent_keywords": {
+    "greeting": [
+      "سلام",
+      "عسلامة",
+      "مرحبا",
+      "أهلا",
+      "اهلا",
+      "bonjour",
+      "salut",
+      "hello",
+      "hi",
+      "cv",
+      "شنحوالك",
+      "كيفاش"
+    ],
+    "price_inquiry": [
+      "سوم",
+      "سعر",
+      "قداش",
+      "prix",
+      "price",
+      "combien",
+      "tarif",
+      "ثمن"
+    ],
+    "product_info": [
+      "بلارات",
+      "بلار",
+      "عدسات",
+      "produit",
+      "catalogue",
+      "كتالوغ",
+      "lunette",
+      "verre"
+    ],
+    "store_info": [
+      "محل",
+      "horaires",
+      "magasin",
+      "store",
+      "وقتاش",
+      "يفتح",
+      "ساعات"
+    ],
+    "order_tracking": [
+      "نتبع",
+      "track",
+      "suivre",
+      "suivi",
+      "حالة",
+      "commande",
+      "كوموند"
+    ],
+    "order_creation": [
+      "نعمل كوموند",
+      "نعدي كوموند",
+      "نطلب",
+      "commander",
+      "nouvelle commande",
+      "نعمل طلبية"
+    ],
+    "appointment_booking": [
+      "رنديفو",
+      "rdv",
+      "rendez-vous",
+      "موعد",
+      "نحجز"
+    ],
+    "thanks": [
+      "مرسي",
+      "شكرا",
+      "merci",
+      "thanks",
+      "يعيشك"
+    ]
+  },
+  "business_keywords": [
+    "سوم",
+    "سعر",
+    "قداش",
+    "prix",
+    "كوموند",
+    "commande",
+    "رنديفو",
+    "محل",
+    "نتبع"
+  ],
+  "required_slots": {
+    "price_inquiry": [
+      "product",
+      "index"
+    ],
+    "store_info": [
+      "city"
+    ],
+    "order_tracking": [
+      "order_id"
+    ],
+    "order_creation": [
+      "product",
+      "index",
+      "city",
+      "phone"
+    ],
+    "appointment_booking": [
+      "city",
+      "date",
+      "time_slot",
+      "phone"
+    ]
+  },
+  "intent_to_tool": {
+    "price_inquiry": "get_price",
+    "store_info": "get_store_info",
+    "order_tracking": "track_order",
+    "order_creation": "create_order",
+    "appointment_booking": "book_appointment"
+  },
+  "tool_execution_policy": {
+    "price_inquiry": "auto",
+    "store_info": "auto",
+    "order_tracking": "auto",
+    "order_creation": "draft",
+    "appointment_booking": "draft"
+  },
+  "tool_descriptions": {
+    "get_price": "Lookup product pricing from the catalog.",
+    "get_store_info": "Return store hours and store metadata for a city.",
+    "track_order": "Track an order by ID and optional phone verification.",
+    "create_order": "Create a new order in the mock order system.",
+    "book_appointment": "Book an appointment in the mock appointment system."
+  },
+  "product_aliases": {
+    "single_vision": [
+      "بلارات",
+      "بلار",
+      "simple",
+      "unifocal",
+      "verre simple",
+      "عادي"
+    ],
+    "progressive": [
+      "بروقرسيف",
+      "progressive",
+      "progressif",
+      "perventia"
+    ],
+    "blue_cut": [
+      "بلو كات",
+      "blue cut",
+      "bluecut",
+      "blue_cut"
+    ],
+    "photochromic": [
+      "فوتوكروميك",
+      "photochromic",
+      "transition"
+    ]
+  },
+  "location_aliases": {
+    "Tunis": [
+      "تونس",
+      "tunis"
+    ],
+    "Sfax": [
+      "صفاقس",
+      "sfax"
+    ],
+    "Sousse": [
+      "سوسة",
+      "sousse"
+    ],
+    "Ariana": [
+      "أريانة",
+      "ariana"
+    ],
+    "Nabeul": [
+      "نابل",
+      "nabeul"
+    ]
+  },
+  "out_of_domain_keywords": [
+    "salaire",
+    "emploi",
+    "travail",
+    "politique",
+    "football",
+    "كرة",
+    "طبيب",
+    "restaurant",
+    "سياحة",
+    "voyage",
+    "hotel",
+    "banque",
+    "crédit",
+    "université",
+    "جامعة",
+    "météo",
+    "weather",
+    "bitcoin",
+    "crypto"
+  ],
+  "franco_map": {
+    "salam": "سلام",
+    "aslema": "عسلامة",
+    "bjr": "بونجور",
+    "cv": "لاباس",
+    "chkoun": "شكون",
+    "enti": "إنت",
+    "ena": "أنا",
+    "chnowa": "شنوة",
+    "blarat": "بلارات",
+    "commande": "كوموند",
+    "stock": "ستوك",
+    "prix": "سوم",
+    "n7eb": "نحب",
+    "na3ref": "نعرف",
+    "bech": "باش",
+    "3aweni": "عاونّي",
+    "9olli": "قلّي",
+    "famma": "فمّا",
+    "3andkom": "عندكم",
+    "mawjoud": "موجود"
+  },
+  "slot_patterns": {
+    "customer_id": "\\b(?:CLI|CLT|CLIENT|CUST)[-_]?[A-Z0-9]{3,}\\b"
+  },
+  "runtime_modes": {
+    "default": "autonomous"
+  },
+  "rag": {
+    "source_dirs": [
+      "data/kb",
+      "data/rag"
+    ],
+    "chunk_size": 380,
+    "chunk_overlap": 60,
+    "top_k": 4,
+    "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+  },
+  "memory": {
+    "history_state_path": "data/history/session_state.json",
+    "conversation_log_path": "data/history/conversations.jsonl",
+    "learning_buffer_path": "data/history/learning_buffer.jsonl",
+    "pending_learning_path": "data/history/learning_pending.jsonl",
+    "feedback_log_path": "data/history/feedback_log.jsonl",
+    "approved_dpo_feedback_path": "data/history/feedback_dpo.jsonl",
+    "ratings_log_path": "data/history/ratings_log.jsonl",
+    "admin_corrections_path": "data/history/admin_corrections.jsonl",
+    "top_k": 3
+  },
+  "api": {
+    "allowed_origins": [
+      "http://localhost:4200",
+      "http://127.0.0.1:4200"
+    ],
+    "require_api_key": false
+  },
+  "database": {
+    "url": "",
+    "echo": false
+  }
+}

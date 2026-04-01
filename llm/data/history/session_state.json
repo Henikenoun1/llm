@@ -1,0 +1,163 @@
+{
+  "smoke-session": {
+    "history": [],
+    "last_active": 1773933006.2089772,
+    "state": {
+      "active_intent": "order_tracking",
+      "current_intent": "order_tracking",
+      "slots": {
+        "order_id": "<ORDER_ID>"
+      },
+      "missing_slots": [],
+      "open_form": false,
+      "last_tool_call": {
+        "name": "track_order",
+        "args": {
+          "order_id": "<ORDER_ID>"
+        }
+      },
+      "last_tool_result": {
+        "status": "ok",
+        "echo": {
+          "order_id": "<ORDER_ID>"
+        }
+      },
+      "customer_context": {
+        "echo": {
+          "order_id": "<ORDER_ID>"
+        }
+      },
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": false,
+      "turn_index": 0
+    }
+  },
+  "collect-session": {
+    "history": [],
+    "last_active": 1773933006.213397,
+    "state": {
+      "active_intent": "order_tracking",
+      "current_intent": "order_tracking",
+      "slots": {
+        "index": "1.67",
+        "city": "Tunis",
+        "product": "progressive"
+      },
+      "missing_slots": [
+        "order_id"
+      ],
+      "open_form": true,
+      "last_tool_call": null,
+      "last_tool_result": null,
+      "customer_context": {},
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": true,
+      "turn_index": 0
+    }
+  },
+  "eval-case-0": {
+    "history": [],
+    "last_active": 1773935256.313408,
+    "state": {
+      "active_intent": null,
+      "current_intent": "greeting",
+      "slots": {},
+      "missing_slots": [],
+      "open_form": false,
+      "last_tool_call": null,
+      "last_tool_result": null,
+      "customer_context": {},
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": false,
+      "turn_index": 0
+    }
+  },
+  "eval-case-1": {
+    "history": [],
+    "last_active": 1773935256.440123,
+    "state": {
+      "active_intent": "price_inquiry",
+      "current_intent": "price_inquiry",
+      "slots": {
+        "index": "1.67",
+        "city": "Tunis",
+        "product": "single_vision"
+      },
+      "missing_slots": [],
+      "open_form": true,
+      "last_tool_call": {
+        "name": "get_price",
+        "args": {
+          "product": "single_vision",
+          "index": "1.67",
+          "city": "Tunis"
+        }
+      },
+      "last_tool_result": {
+        "status": "not_found",
+        "product": "single_vision",
+        "index": "1.67"
+      },
+      "customer_context": {},
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": true,
+      "turn_index": 0
+    }
+  },
+  "eval-case-2": {
+    "history": [],
+    "last_active": 1773935256.574462,
+    "state": {
+      "active_intent": "order_tracking",
+      "current_intent": "order_tracking",
+      "slots": {
+        "order_id": "<ORDER_ID>"
+      },
+      "missing_slots": [],
+      "open_form": true,
+      "last_tool_call": {
+        "name": "track_order",
+        "args": {
+          "order_id": "<ORDER_ID>"
+        }
+      },
+      "last_tool_result": {
+        "status": "not_found",
+        "order_id": "<ORDER_ID>"
+      },
+      "customer_context": {},
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": true,
+      "turn_index": 0
+    }
+  },
+  "eval-case-3": {
+    "history": [],
+    "last_active": 1773935256.7346327,
+    "state": {
+      "active_intent": "order_creation",
+      "current_intent": "order_creation",
+      "slots": {
+        "index": "1.67",
+        "city": "Tunis",
+        "product": "progressive"
+      },
+      "missing_slots": [
+        "phone"
+      ],
+      "open_form": true,
+      "last_tool_call": null,
+      "last_tool_result": null,
+      "customer_context": {},
+      "last_exchange": null,
+      "last_review_status": null,
+      "review_required": true,
+      "turn_index": 0
+    }
+  }
+}

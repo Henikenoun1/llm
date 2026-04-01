@@ -1,0 +1,5 @@
+{"doc_id": "POL-APPT-01", "category": "appointments", "title": "Politique de rendez-vous", "text": "Les rendez-vous se prennent par téléphone ou en magasin. Un numéro valide est requis. Les créneaux dépendent de la disponibilité du magasin."}
+{"doc_id": "POL-PRICE-01", "category": "pricing", "title": "Politique de prix", "text": "Les prix affichés sont indicatifs et doivent être confirmés avec le catalogue en vigueur. La complexité de la prescription peut affecter le prix final."}
+{"doc_id": "POL-TRACK-01", "category": "orders", "title": "Suivi de commande", "text": "Le suivi nécessite la référence de commande. Le numéro de téléphone utilisé lors de la création peut être demandé pour vérification."}
+{"doc_id": "POL-RET-01", "category": "returns", "title": "Politique retours", "text": "Les verres sur mesure ne sont pas remboursables après fabrication sauf défaut. Les cas litigieux sont escaladés vers un agent humain."}
+{"doc_id": "POL-PRESC-01", "category": "prescription", "title": "Ordonnance", "text": "Une ordonnance valide peut être requise pour certains types de verres. L'assistant ne fournit pas de conseils médicaux."}

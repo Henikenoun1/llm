@@ -1,0 +1,68 @@
+{
+  "type": "object",
+  "required": [
+    "conversation_id",
+    "language_style",
+    "messages",
+    "intent",
+    "grounded"
+  ],
+  "properties": {
+    "conversation_id": {
+      "type": "string"
+    },
+    "language_style": {
+      "type": "string",
+      "enum": [
+        "tounsi",
+        "fr",
+        "code_switch"
+      ]
+    },
+    "intent": {
+      "type": "string"
+    },
+    "grounded": {
+      "type": "boolean"
+    },
+    "messages": {
+      "type": "array",
+      "minItems": 2,
+      "items": {
+        "type": "object",
+        "required": [
+          "role",
+          "text"
+        ],
+        "properties": {
+          "role": {
+            "type": "string",
+            "enum": [
+              "system",
+              "user",
+              "assistant",
+              "tool"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "tool_name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "metadata": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "additionalProperties": true
+      }
+    }
+  },
+  "additionalProperties": true
+}

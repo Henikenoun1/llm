@@ -1,0 +1,40 @@
+# Tounsi Call Center LLM – Production Requirements
+# Tested on: Python 3.12, Tesla T4 (15 GB VRAM), CUDA 12.2
+
+# Core ML
+torch==2.5.1
+transformers==4.46.3
+datasets==3.1.0
+peft==0.13.2
+trl==0.12.2
+accelerate==1.0.1
+bitsandbytes==0.44.1
+safetensors==0.4.5
+sentencepiece==0.2.0
+
+# Evaluation
+evaluate==0.4.3
+rouge-score==0.1.2
+sacrebleu==2.4.3
+sentence-transformers==3.3.1
+scikit-learn==1.5.2
+
+# Data / Utils
+pandas==2.2.3
+pyarrow==18.0.0
+numpy>=1.26.4
+rank-bm25==0.2.2
+jsonschema==4.23.0
+requests==2.32.3
+tqdm==4.67.0
+huggingface_hub==0.26.2
+python-docx==1.1.2
+faiss-cpu==1.10.0; platform_system != "Windows"
+
+# API Server
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+pydantic==2.10.3
+httpx==0.28.1
+SQLAlchemy==2.0.36
+psycopg[binary]==3.2.3
