@@ -4,7 +4,8 @@ Central project configuration.
 The goal of this module is to make the project reusable across domains by
 moving as much behavior as possible behind files and structured config.
 Changing the business context later should mostly mean changing files inside
-`data/config`, `data/kb`, `data/rag`, and the training datasets.
+`data/config`, the official business corpus under `data/rag`, the structured
+tool-support data under `data/kb`, and the training datasets.
 """
 from __future__ import annotations
 
@@ -164,6 +165,23 @@ DEFAULT_DOMAIN_CONFIG: dict[str, Any] = {
         "إنت agent تخدم في مركز نداء. جاوب باللهجة التونسية كي يلزم، "
         "وكون واضح ومهني ومختصر. إذا ما تعرفش معلومة قولها بصراحة."
     ),
+    "system_prompts": {
+        "default": (
+            "إنت agent تخدم في مركز نداء. جاوب باللهجة التونسية كي يلزم، "
+            "وكون واضح ومهني ومختصر. إذا ما تعرفش معلومة قولها بصراحة."
+        ),
+        "arabic": (
+            "جاوب باللهجة التونسية بالحروف العربية. اسأل سؤال توضيحي واحد في كل مرة "
+            "وما تخترعش معلومات تجارية."
+        ),
+        "arabizi": (
+            "Reply in Tunisian Arabizi with a professional call-center tone. "
+            "Do not invent business facts."
+        ),
+        "code_switch": (
+            "استعمل darja تونسية مع termes metier بالفرنسية بطريقة طبيعية ومختصرة."
+        ),
+    },
     "humanized_prompt": (
         "إنت عامل حقيقي في مركز النداء، موش بوت. احكي بطبيعة، اسأل على "
         "المعطيات الناقصة، وما تخترعش معلومات."
@@ -181,7 +199,7 @@ DEFAULT_DOMAIN_CONFIG: dict[str, Any] = {
     "franco_map": {},
     "tool_descriptions": {},
     "runtime_modes": {"default": "speak"},
-    "rag_source_dirs": ["data/kb", "data/rag"],
+    "rag_source_dirs": ["data/rag"],
     "memory": {
         "history_state_path": "data/history/session_state.json",
         "conversation_log_path": "data/history/conversations.jsonl",
@@ -213,11 +231,12 @@ FEW_SHOTS_CFG = _load_jsonl(FEW_SHOTS_PATH)
 @dataclass
 class ProjectConfig:
     base_model: str = "Qwen/Qwen2.5-7B-Instruct"
-    max_seq_len: int = 2048
+    max_seq_len: int = 1536
     use_4bit: bool = True
+    target_runtime_profile: str = "t4_16gb"
 
-    lora_rank: int = 32
-    lora_alpha: int = 64
+    lora_rank: int = 16
+    lora_alpha: int = 32
     lora_dropout: float = 0.05
     lora_target_modules: list[str] = field(
         default_factory=lambda: [
@@ -232,18 +251,34 @@ class ProjectConfig:
     )
 
     batch_size: int = 1
-    grad_accum_steps: int = 8
-    warmup_ratio: float = 0.03
+    grad_accum_steps: int = 16
+    warmup_ratio: float = 0.05
     weight_decay: float = 0.01
     fp16: bool = True
     bf16: bool = False
 
-    self_sup_learning_rate: float = 1e-4
-    sft_learning_rate: float = 2e-4
-    dpo_learning_rate: float = 2e-5
-    epochs_self_sup: int = 1
+    self_sup_learning_rate: float = 6e-5
+    sft_learning_rate: float = 8e-5
+    dpo_learning_rate: float = 4e-6
+    epochs_self_sup: int = 2
     epochs_sft: int = 3
     epochs_dpo: int = 1
+    self_sup_max_seq_len: int = 1024
+    sft_max_seq_len: int = 1536
+    dpo_max_seq_len: int = 1024
+    self_sup_target_texts: int | None = 104000
+    self_sup_max_steps: int = 1800
+    sft_max_steps: int | None = 2400
+    dpo_max_steps: int = 600
+    self_sup_continue_from_adapter: bool = False
+    optim: str = "paged_adamw_8bit"
+    lr_scheduler_type: str = "cosine"
+    max_grad_norm: float = 0.3
+    save_total_limit: int = 1
+    early_stopping_patience: int = 2
+    min_self_sup_train_rows: int = 25000
+    min_sft_train_rows: int = 8000
+    min_dpo_train_rows: int = 3000
 
     temperature: float = 0.35
     top_p: float = 0.9
@@ -251,7 +286,7 @@ class ProjectConfig:
     repetition_penalty: float = 1.1
 
     retrieval_top_k: int = 4
-    few_shot_top_k: int = 2
+    few_shot_top_k: int = 3
     memory_top_k: int = 3
     max_history_messages: int = 24
     session_ttl_seconds: int = 60 * 60 * 24
@@ -267,6 +302,7 @@ class ProjectConfig:
     database_url_env: str = "CALL_CENTER_DATABASE_URL"
     database_url: str | None = field(default=None, repr=False)
     database_echo: bool = False
+    database_required_for_production: bool = False
     cors_allowed_origins: list[str] = field(
         default_factory=lambda: [
             "http://localhost:4200",
@@ -298,7 +334,10 @@ class ProjectConfig:
     )
 
     def __post_init__(self) -> None:
-        if not RUNTIME.get("bf16"):
+        if not RUNTIME.get("cuda"):
+            self.bf16 = False
+            self.fp16 = False
+        elif not RUNTIME.get("bf16"):
             self.bf16 = False
             self.fp16 = True
 
@@ -321,6 +360,9 @@ class ProjectConfig:
 
         database_cfg = DOMAIN_CFG.get("database", {})
         self.database_echo = bool(database_cfg.get("echo", self.database_echo))
+        self.database_required_for_production = bool(
+            database_cfg.get("required_for_production", self.database_required_for_production)
+        )
         database_url = os.getenv(self.database_url_env) or database_cfg.get("url")
         self.database_url = str(database_url) if database_url else None
 

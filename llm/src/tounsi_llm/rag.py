@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import csv
 import json
+import io
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
@@ -33,6 +34,9 @@ class RagChunk:
     text: str
     source: str
     metadata: dict[str, Any]
+
+
+_SUPPORTED_SUFFIXES = {".md", ".txt", ".jsonl", ".csv", ".json"}
 
 
 class EmbeddingBackend:
@@ -78,72 +82,144 @@ class EmbeddingBackend:
         return vectors
 
 
+def _is_within(child: Path, parent: Path) -> bool:
+    try:
+        child.resolve().relative_to(parent.resolve())
+        return True
+    except Exception:
+        return False
+
+
 def _iter_domain_source_files() -> list[Path]:
     files: list[Path] = []
     rag_cfg = DOMAIN_CFG.get("rag", {})
-    source_dirs = rag_cfg.get("source_dirs", DOMAIN_CFG.get("rag_source_dirs", ["data/kb", "data/rag"]))
+    source_dirs = rag_cfg.get("source_dirs", DOMAIN_CFG.get("rag_source_dirs", ["data/rag"]))
     for source_dir in source_dirs:
         root = resolve_project_path(source_dir)
         if not root.exists():
             continue
-        files.extend(path for path in root.rglob("*") if path.is_file())
+        if not _is_within(root, RAG_DIR):
+            logger.warning("Ignoring non-RAG retrieval source directory: %s", root)
+            continue
+        files.extend(path for path in root.rglob("*") if path.is_file() and path.suffix.lower() in _SUPPORTED_SUFFIXES)
     if not files and RAG_DIR.exists():
-        files.extend(path for path in RAG_DIR.rglob("*") if path.is_file())
+        files.extend(path for path in RAG_DIR.rglob("*") if path.is_file() and path.suffix.lower() in _SUPPORTED_SUFFIXES)
     return sorted(set(files))
+
+
+def _read_text_with_fallback(path: Path) -> str:
+    for encoding in ("utf-8", "utf-8-sig", "cp1252", "latin-1"):
+        try:
+            return path.read_text(encoding=encoding)
+        except UnicodeDecodeError:
+            continue
+    return path.read_text(encoding="utf-8", errors="ignore")
+
+
+def _repair_common_mojibake(text: str) -> str:
+    if not text:
+        return ""
+    markers = ("Ã", "â", "Â", "�")
+    if not any(marker in text for marker in markers):
+        return text
+    try:
+        repaired = text.encode("latin-1", errors="ignore").decode("utf-8", errors="ignore")
+    except Exception:
+        return text
+    if repaired and repaired.count("Ã") + repaired.count("â") < text.count("Ã") + text.count("â"):
+        return repaired
+    return text
+
+
+def _format_metadata_context(metadata: dict[str, Any]) -> str:
+    if not metadata:
+        return ""
+    keys = [
+        "type",
+        "agence",
+        "secteur",
+        "nb_livraisons_jour",
+        "premier_creneau",
+        "tous_creneaux",
+        "code",
+        "nom",
+        "marque",
+        "geometrie",
+        "matiere",
+        "photochromique",
+        "diametre",
+    ]
+    items: list[str] = []
+    for key in keys:
+        value = metadata.get(key)
+        if value in (None, "", []):
+            continue
+        if isinstance(value, list):
+            rendered = ", ".join(str(item) for item in value)
+        else:
+            rendered = str(value)
+        items.append(f"{key}: {rendered}")
+    return "\n".join(items)
 
 
 def _read_text_documents(path: Path) -> Iterable[tuple[str, str, dict[str, Any]]]:
     suffix = path.suffix.lower()
     if suffix in {".md", ".txt"}:
-        text = path.read_text(encoding="utf-8", errors="ignore").strip()
+        text = _repair_common_mojibake(_read_text_with_fallback(path)).strip()
         if text:
             yield (path.stem, text, {"path": str(path)})
         return
 
     if suffix == ".jsonl":
-        with open(path, encoding="utf-8") as handle:
-            for idx, line in enumerate(handle):
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    row = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                text = (
-                    row.get("text")
-                    or row.get("content")
-                    or row.get("body")
-                    or row.get("description")
-                    or json.dumps(row, ensure_ascii=False)
-                )
-                if text:
-                    yield (f"{path.stem}_{idx}", str(text), {"path": str(path), "row": idx})
+        content = _read_text_with_fallback(path)
+        for idx, line in enumerate(content.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            metadata = row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {}
+            text = (
+                row.get("text")
+                or row.get("content")
+                or row.get("body")
+                or row.get("description")
+                or json.dumps(row, ensure_ascii=False)
+            )
+            if not text:
+                continue
+            repaired_text = _repair_common_mojibake(str(text))
+            metadata_context = _format_metadata_context(metadata)
+            merged_text = f"{repaired_text}\n{metadata_context}".strip() if metadata_context else repaired_text
+            merged_metadata = {"path": str(path), "row": idx, **metadata}
+            yield (f"{path.stem}_{idx}", merged_text, merged_metadata)
         return
 
     if suffix == ".csv":
-        with open(path, encoding="utf-8", errors="ignore") as handle:
-            reader = csv.DictReader(handle)
-            for idx, row in enumerate(reader):
-                text = " | ".join(f"{key}: {value}" for key, value in row.items() if value not in (None, ""))
-                if text:
-                    yield (f"{path.stem}_{idx}", text, {"path": str(path), "row": idx})
+        content = _read_text_with_fallback(path)
+        reader = csv.DictReader(io.StringIO(content))
+        for idx, row in enumerate(reader):
+            text = " | ".join(f"{key}: {value}" for key, value in row.items() if value not in (None, ""))
+            if text:
+                yield (f"{path.stem}_{idx}", _repair_common_mojibake(text), {"path": str(path), "row": idx})
         return
 
     if suffix == ".json":
         try:
-            payload = json.loads(path.read_text(encoding="utf-8"))
+            payload = json.loads(_read_text_with_fallback(path))
         except json.JSONDecodeError:
             return
         if isinstance(payload, list):
             for idx, row in enumerate(payload):
                 text = row.get("text") if isinstance(row, dict) else str(row)
                 if text:
-                    yield (f"{path.stem}_{idx}", str(text), {"path": str(path), "row": idx})
+                    yield (f"{path.stem}_{idx}", _repair_common_mojibake(str(text)), {"path": str(path), "row": idx})
         elif isinstance(payload, dict):
             text = payload.get("text") or payload.get("content") or json.dumps(payload, ensure_ascii=False)
             if text:
-                yield (path.stem, str(text), {"path": str(path)})
+                yield (path.stem, _repair_common_mojibake(str(text)), {"path": str(path)})
 
 
 def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:

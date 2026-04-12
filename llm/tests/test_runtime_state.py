@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
 
 from src.tounsi_llm.config import DOMAIN_CFG
 from src.tounsi_llm.corrections import LiveCorrectionStore
-from src.tounsi_llm.inference import _resolve_turn_state
+from src.tounsi_llm.inference import _recover_missing_slots_from_turn, _resolve_turn_state
 from src.tounsi_llm.memory import ConversationMemoryStore
 
 
@@ -47,7 +47,7 @@ class RuntimeStateTests(unittest.TestCase):
                 "slots": {"product": "progressive", "index": "1.67"},
             },
         )
-        self.assertEqual(intent, "order_creation")
+        self.assertEqual(intent, "create_order")
         self.assertEqual(
             slots,
             {
@@ -116,6 +116,22 @@ class RuntimeStateTests(unittest.TestCase):
 
         self.assertIsNotNone(match)
         self.assertEqual(match["corrected_response"], "Commande validée par l'admin.")
+
+    def test_short_reply_recovers_num_client_from_missing_slots(self) -> None:
+        recovered = _recover_missing_slots_from_turn(
+            text="5007",
+            extracted_slots={},
+            session_state={"missing_slots": ["num_client"]},
+        )
+        self.assertEqual(recovered.get("num_client"), "5007")
+
+    def test_short_reply_recovers_order_id_from_missing_slots(self) -> None:
+        recovered = _recover_missing_slots_from_turn(
+            text="CMD70007",
+            extracted_slots={},
+            session_state={"missing_slots": ["order_id"]},
+        )
+        self.assertEqual(recovered.get("order_id"), "CMD70007")
 
 
 if __name__ == "__main__":

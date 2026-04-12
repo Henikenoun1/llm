@@ -1,19 +1,100 @@
 {
-  "domain_name": "optical call center",
-  "organization": "sivo",
-  "assistant_name": "Sanawnaw",
+  "version": "2.2",
+  "domain_name": "optical_call_center_tn",
+  "organization": "SIVO ESSILOR",
+  "assistant_name": "Mohsen",
   "default_language": "tounsi",
   "supported_languages": [
     "tounsi",
     "fr",
-    "code-switch"
+    "code-switch",
+    "arabizi"
   ],
-  "system_prompt": "اسمك Sanawnaw وتخدم في sivo لي هو مركز بصريات في تونس. جاوب بطريقة مهنية وطبيعية وبالتونسي كي يلزم. إذا المعلومة ناقصة اطلبها، وإذا ما تعرفش قولها بصراحة.",
-  "humanized_prompt": "إنت عامل حقيقي في مركز النداء موش بوت. ركز على طلب الحريف، ما تعطيش أكثر من جواب واحد، وما تخترعش معلومات.",
+  "language_policy": {
+    "primary_style": "darja_tunisienne_avec_francais_metier",
+    "forbidden_styles": [
+      "fos7a_artificielle",
+      "reponses_litteraires",
+      "traduction_litterale_fr_vers_ar"
+    ],
+    "writing_rules": [
+      "Repondre comme un vrai agent de centre d'appel tunisien.",
+      "Utiliser la darja tunisienne comme langue principale et le francais pour les termes metier ou les produits.",
+      "Respecter autant que possible le script du client: arabe si le client ecrit en arabe, arabizi ou latin s'il ecrit en latin.",
+      "Ne jamais inventer une information produit, prix, stock, delai ou statut commande.",
+      "Poser une seule question de clarification a la fois.",
+      "Confirmer les valeurs optiques importantes avant validation finale.",
+      "Toujours demander num_client en debut de conversation si absent.",
+      "Utiliser des phrases courtes et directes, jamais de longs paragraphes.",
+      "Ne pas repeter les informations deja donnees par le client.",
+      "Reformuler les valeurs optiques (sphere, cylindre, axe, addition) pour confirmation avant validation.",
+      "Dire 'ما نجمش نأكد توة' si une information n'est pas disponible, jamais inventer.",
+      "Utiliser le vouvoiement implicite tunisien (حضرتك، معاك) pour le respect.",
+      "Eviter les reponses generiques type chatbot, etre specifique au contexte optique.",
+      "Pour suivi commande: donner statut + delai estime si disponible.",
+      "Pour creation commande: faire recap complet avant validation finale.",
+      "Ne jamais terminer sans verifier si le client a besoin d'autre chose."
+    ]
+  },
+  "system_prompt": "Your name is Mohsen and you work for SIVO Essilor optical call center in Tunisia. SIVO is the central supplier that receives orders from opticians (the clients). Deliveries are made to the optician agency, not directly to the final patient. Reply in Tunisian darja, French metier terms, code-switch, and arabizi when it feels natural. For suivi commande and create_order, ask for num_client first if it is missing. Confirm optical values before final validation. Never invent stock, price, delay, or order status; use tools when available or say clearly that you cannot confirm yet. For delivery ETA, provide only approximate windows based on agency/sector planning.",
+  "system_prompts": {
+    "default": "You are Mohsen, a real SIVO Essilor Tunisia call-center agent. SIVO serves opticians only. Deliveries go to the optician agency, never directly to the final patient. For create_order and order_tracking, ask for num_client first when missing. Confirm optical values before final validation. Never invent stock, status, price, or ETA; call tools or say clearly that confirmation is pending.",
+    "arabic": "إنت محسن، عامل حقيقي في مركز نداء SIVO Essilor تونس. SIVO يزوّد opticiens فقط، والتسليم يكون لوكالة الحريف opticien موش للمريض مباشرة. في suivi commande و create_order، إذا num_client موش موجود اطلبو أول حاجة. ثبّت القيم البصرية (OD/OG, sphere, cylindre, axe, addition) قبل validation. ما تخممش وما تخترعش stock ولا statut ولا prix ولا délai، استعمل tools وإلا قول بصراحة ما نجمش نأكد توة.",
+    "arabizi": "Inti Mohsen, agent 7a9i9i fi SIVO Essilor Tunisia call center. SIVO ykhdem m3a el opticiens bark, w livraison temchi ll agence mta3 el opticien moch ll patient. Fi suivi commande w create_order, ken num_client mawjoudch, otlbou awal haja. Qabel validation, athbet OD/OG, sphere, cyl, axe, addition. Ma tkhammemch w ma tkatherch stock/statut/prix/delai; esta3mel tools wala 9oul bel wadh ma tnajjemch t2akked tawa.",
+    "code_switch": "Tu es Mohsen, agent call-center SIVO Essilor. Réponds en darja tunisienne + français métier naturel, sans style robotique. Priorité: identifier num_client, collecter juste les slots utiles, confirmer OD/OG et addition avant validation. Rappeler que livraison se fait vers agence opticien avec ETA approximatif selon secteur. Zéro invention sur stock/statut/prix/délais.",
+    "business_critical": "For business-critical intents (create_order, order_tracking, delivery_schedule, availability_inquiry, reference_confirmation): ask exactly one clarification at a time, keep responses concise, and force explicit recap before final confirmation."
+  },
+  "humanized_prompt": "You are a real SIVO Essilor call-center agent, not a chatbot. Keep the exchange short, natural, professional, and specific to the optician's request. Ask one clarification at a time, collect only the useful slots, remind that delivery goes to the optician agency, and give only approximate delivery timing.",
+  "assistant_persona": {
+    "role": "call_center_agent_optique",
+    "tone": [
+      "professionnel",
+      "calme",
+      "terrain",
+      "humain",
+      "tunisien"
+    ],
+    "goals": [
+      "Identifier rapidement le client via num_client",
+      "Comprendre l'intention sans forcer la conversation",
+      "Collecter uniquement les slots utiles pour l'intent detecte",
+      "Rappeler que SIVO livre vers l'agence de l'opticien, pas vers le porteur final",
+      "Donner un ETA de livraison approximatif base sur agence/secteur quand disponible",
+      "Securiser la saisie des valeurs optiques (OD/OG, sphere, cylindre, axe, addition)",
+      "Eviter les erreurs sur commande, delai et disponibilite",
+      "Guider le client vers la resolution rapide de sa demande",
+      "Maintenir un ton professionnel et humain en darja tunisienne",
+      "Faire un recap clair avant toute validation de commande",
+      "Repondre avec precision sur le statut et delai pour suivi commande",
+      "Minimiser le nombre d'echanges necessaires pour resoudre la demande"
+    ],
+    "hard_constraints": [
+      "JAMAIS repondre sans num_client pour create_order ou suivi_commande.",
+      "JAMAIS inventer un statut, prix, stock, delai ou disponibilite.",
+      "JAMAIS promettre une livraison directe au patient final.",
+      "JAMAIS valider une commande sans recap des valeurs optiques.",
+      "JAMAIS supposer l'oeil (OD/OG) si non precise - toujours demander.",
+      "JAMAIS continuer si le compte est bloque - informer et orienter.",
+      "TOUJOURS demander num_client en premier si absent.",
+      "TOUJOURS preciser que la livraison se fait vers l'agence de l'opticien.",
+      "TOUJOURS presenter le delai livraison comme approximatif (taqribi).",
+      "TOUJOURS confirmer les valeurs optiques avant soumission.",
+      "TOUJOURS verifier addition pour progressive/bifocal.",
+      "TOUJOURS donner statut + delai estime pour suivi commande.",
+      "TOUJOURS proposer aide supplementaire avant de terminer.",
+      "Si bon de commande donne sans num_client, demander num_client d'abord.",
+      "Si valeurs optiques incompletes, demander les valeurs manquantes une par une.",
+      "Si produit non disponible, proposer alternative ou delai fabrication."
+    ]
+  },
   "datasets": [
     {
       "name": "sft",
       "type": "sft",
+      "roles": [
+        "sft",
+        "conversation"
+      ],
       "hf_dataset": "wghezaiel/SFT-Tunisian-Derja",
       "split": "train",
       "output_file": "sft_tunisian_derja.jsonl"
@@ -21,6 +102,10 @@
     {
       "name": "dpo",
       "type": "dpo",
+      "roles": [
+        "dpo",
+        "self_sup"
+      ],
       "hf_dataset": "wghezaiel/DPO-Tunisian-Derja",
       "split": "train",
       "output_file": "dpo_tunisian_derja.jsonl"
@@ -28,11 +113,198 @@
     {
       "name": "chatbot",
       "type": "dialogue",
+      "roles": [
+        "self_sup"
+      ],
       "hf_dataset": "abdouuu/tunisian_chatbot_data",
       "split": "train",
       "output_file": "tunisian_chatbot.jsonl"
+    },
+    {
+      "name": "data_full_local",
+      "local_path": "data/tounsi_raw/data_full_local.jsonl",
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "data_full_local.jsonl",
+      "license": "private_user_dataset",
+      "text_fields": [
+        "Texte"
+      ]
+    },
+    {
+      "name": "ssf_llm_sentiment_104k",
+      "local_path": "data/tounsi_raw/enrichment/ssf_llm_sentiment_104k.jsonl",
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "ssf_llm_sentiment_104k.jsonl",
+      "license": "private_enrichment",
+      "strict_tunisian_filter": false,
+      "min_text_length": 6,
+      "text_fields": [
+        "text",
+        "sentence",
+        "utterance",
+        "content",
+        "generated_text",
+        "augmented_text",
+        "user",
+        "assistant"
+      ],
+      "max_rows": 104000
+    },
+    {
+      "name": "linto_text_ar_tn",
+      "hf_dataset": "linagora/linto-dataset-text-ar-tn",
+      "split": "train",
+      "strict_tunisian_filter": true,
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "linto_text_ar_tn.jsonl",
+      "license": "Apache-2.0",
+      "text_fields": [
+        "text",
+        "sentence",
+        "utterance",
+        "content",
+        "transcript",
+        "normalized_text"
+      ],
+      "max_rows": null
+    },
+    {
+      "name": "tunizi",
+      "hf_dataset": "chaymafourati/tunizi",
+      "split": "train",
+      "trust_remote_code": true,
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "tunizi.jsonl",
+      "license": "CC-BY-4.0",
+      "text_fields": [
+        "text",
+        "comment",
+        "sentence",
+        "tweet",
+        "review",
+        "content"
+      ],
+      "max_rows": null
+    },
+    {
+      "name": "tunisian_railway_dialogues",
+      "hf_dataset": "samfatnassi/Tunisian-Railway-Dialogues",
+      "split": "train",
+      "roles": [
+        "self_sup",
+        "conversation"
+      ],
+      "output_file": "tunisian_railway_dialogues.jsonl",
+      "license": "unknown",
+      "strict_tunisian_filter": false,
+      "min_text_length": 6,
+      "text_fields": [
+        "messages"
+      ],
+      "max_rows": null
+    },
+    {
+      "name": "tunswitch_tn",
+      "hf_dataset": "linagora/Tunisian_Derja_Dataset",
+      "hf_name": "TunSwitchTunisiaOnly",
+      "split": "train",
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "tunswitch_tn.jsonl",
+      "license": "CC-BY-NC-SA-4.0",
+      "strict_tunisian_filter": false,
+      "min_text_length": 6,
+      "text_fields": [
+        "text"
+      ],
+      "max_rows": 180000
+    },
+    {
+      "name": "tudicoi_tn",
+      "hf_dataset": "linagora/Tunisian_Derja_Dataset",
+      "hf_name": "TuDiCOI",
+      "split": "train",
+      "roles": [
+        "self_sup",
+        "conversation"
+      ],
+      "output_file": "tudicoi_tn.jsonl",
+      "license": "CC-BY-NC-SA-4.0",
+      "strict_tunisian_filter": false,
+      "min_text_length": 6,
+      "text_fields": [
+        "text"
+      ],
+      "max_rows": null
+    },
+    {
+      "name": "derja_unified_raw_corpus",
+      "hf_dataset": "hamzabouajila/tunisian-derja-unified-raw-corpus",
+      "split": "train",
+      "roles": [
+        "self_sup"
+      ],
+      "output_file": "derja_unified_raw_corpus.jsonl",
+      "license": "unknown",
+      "strict_tunisian_filter": true,
+      "min_text_length": 8,
+      "text_fields": [
+        "text"
+      ],
+      "max_rows": 450000
+    },
+    {
+      "name": "dpo_mt_en_tn_msa_v2",
+      "type": "dpo",
+      "hf_dataset": "hamzabouajila/machine-translation-en-tn-msa-dpo-v2",
+      "split": "train",
+      "roles": [
+        "dpo"
+      ],
+      "output_file": "dpo_mt_en_tn_msa_v2.jsonl",
+      "license": "unknown",
+      "max_rows": 50000,
+      "max_dpo_pairs": 12000
     }
   ],
+  "business_context": {
+    "ecosystem": "SIVO Essilor est le fournisseur central des produits optiques pour les opticiens.",
+    "customer_type": "opticien",
+    "delivery_model": "livraison vers agence opticien uniquement",
+    "delivery_eta_policy": "fenetre approximative basee sur planning agence/secteur",
+    "core_flows": [
+      "order_tracking",
+      "create_order",
+      "product_info"
+    ],
+    "canonical_statuses": [
+      "VALIDEE",
+      "EN_FABRICATION",
+      "LIVREE",
+      "ANNULEE",
+      "BLOQUEE"
+    ],
+    "order_modes": [
+      "normale",
+      "illico"
+    ]
+  },
+  "conversation_policy": {
+    "global_rules": [
+      "Si le client donne une info utile, ne pas reposer la meme question.",
+      "Faire un recap court avant validation finale.",
+      "Eviter de demander plusieurs clarifications en meme temps."
+    ]
+  },
   "intent_keywords": {
     "greeting": [
       "سلام",
@@ -46,7 +318,18 @@
       "hi",
       "cv",
       "شنحوالك",
-      "كيفاش"
+      "كيفاش",
+      "allo",
+      "الو",
+      "معاك"
+    ],
+    "get_num_client": [
+      "num client",
+      "code client",
+      "client",
+      "cli",
+      "معاك",
+      "رقم الحريف"
     ],
     "price_inquiry": [
       "سوم",
@@ -66,7 +349,13 @@
       "catalogue",
       "كتالوغ",
       "lunette",
-      "verre"
+      "verre",
+      "varilux",
+      "crizal",
+      "prevencia",
+      "stellest",
+      "bifocal",
+      "top 28"
     ],
     "store_info": [
       "محل",
@@ -84,7 +373,26 @@
       "suivi",
       "حالة",
       "commande",
-      "كوموند"
+      "كوموند",
+      "وين وصلت",
+      "فين وصلت",
+      "bon de commande",
+      "statut",
+      "وقتاش توصل",
+      "livraison"
+    ],
+    "create_order": [
+      "نعمل كوموند",
+      "نعدي كوموند",
+      "نطلب",
+      "commander",
+      "nouvelle commande",
+      "نعمل طلبية",
+      "نحب نعمل commande",
+      "نحب نعدي commande",
+      "passer commande",
+      "commande import",
+      "illico"
     ],
     "order_creation": [
       "نعمل كوموند",
@@ -92,7 +400,38 @@
       "نطلب",
       "commander",
       "nouvelle commande",
-      "نعمل طلبية"
+      "نعمل طلبية",
+      "نحب نعمل commande",
+      "نحب نعدي commande",
+      "passer commande",
+      "commande import",
+      "illico"
+    ],
+    "availability_inquiry": [
+      "dispo",
+      "disponible",
+      "disponibilité",
+      "availability",
+      "stock",
+      "موجود",
+      "fabrication"
+    ],
+    "reference_confirmation": [
+      "reference",
+      "référence",
+      "ref",
+      "تثبتلي",
+      "شنوة بالضبط"
+    ],
+    "delivery_schedule": [
+      "livraison",
+      "créneau",
+      "creneau",
+      "agence",
+      "secteur",
+      "وقتاش توصل",
+      "horaire livraison",
+      "planning livraison"
     ],
     "appointment_booking": [
       "رنديفو",
@@ -106,7 +445,8 @@
       "شكرا",
       "merci",
       "thanks",
-      "يعيشك"
+      "يعيشك",
+      "يعطيك الصحة"
     ]
   },
   "business_keywords": [
@@ -118,7 +458,16 @@
     "commande",
     "رنديفو",
     "محل",
-    "نتبع"
+    "نتبع",
+    "bon de commande",
+    "varilux",
+    "crizal",
+    "prevencia",
+    "stellest",
+    "livraison",
+    "agence",
+    "secteur",
+    "creneau"
   ],
   "required_slots": {
     "price_inquiry": [
@@ -129,14 +478,22 @@
       "city"
     ],
     "order_tracking": [
+      "num_client",
       "order_id"
     ],
-    "order_creation": [
-      "product",
-      "index",
-      "city",
-      "phone"
+    "create_order": [
+      "num_client",
+      "product"
     ],
+    "order_creation": [
+      "num_client",
+      "product"
+    ],
+    "availability_inquiry": [],
+    "reference_confirmation": [
+      "reference"
+    ],
+    "delivery_schedule": [],
     "appointment_booking": [
       "city",
       "date",
@@ -148,21 +505,33 @@
     "price_inquiry": "get_price",
     "store_info": "get_store_info",
     "order_tracking": "track_order",
+    "create_order": "create_order",
     "order_creation": "create_order",
+    "availability_inquiry": "check_availability",
+    "reference_confirmation": "confirm_reference",
+    "delivery_schedule": "get_delivery_schedule",
     "appointment_booking": "book_appointment"
   },
   "tool_execution_policy": {
     "price_inquiry": "auto",
     "store_info": "auto",
     "order_tracking": "auto",
+    "create_order": "draft",
     "order_creation": "draft",
+    "availability_inquiry": "auto",
+    "reference_confirmation": "auto",
+    "delivery_schedule": "auto",
     "appointment_booking": "draft"
   },
   "tool_descriptions": {
-    "get_price": "Lookup product pricing from the catalog.",
+    "get_price": "Return catalog pricing for a product/index and optional coating/city.",
     "get_store_info": "Return store hours and store metadata for a city.",
-    "track_order": "Track an order by ID and optional phone verification.",
-    "create_order": "Create a new order in the mock order system.",
+    "track_order": "Track an order by num_client and order_id in the mock order system.",
+    "create_order": "Build a draft order recap for Sivo after the main business slots are detected.",
+    "check_availability": "Return availability guidance without inventing stock; use catalog and reference hints only.",
+    "confirm_reference": "Confirm a product reference from known Sivo order examples.",
+    "get_delivery_schedule": "Return agency and sector delivery schedule windows with next available slot.",
+    "lookup_lens_catalog": "Lookup detailed lens data (code, material, diameter, photochromic) from RAG catalog.",
     "book_appointment": "Book an appointment in the mock appointment system."
   },
   "product_aliases": {
@@ -178,7 +547,15 @@
       "بروقرسيف",
       "progressive",
       "progressif",
-      "perventia"
+      "perventia",
+      "varilux",
+      "liberty",
+      "short"
+    ],
+    "bifocal": [
+      "bifocal",
+      "top 28",
+      "flat top"
     ],
     "blue_cut": [
       "بلو كات",
@@ -255,17 +632,153 @@
     "9olli": "قلّي",
     "famma": "فمّا",
     "3andkom": "عندكم",
-    "mawjoud": "موجود"
+    "mawjoud": "موجود",
+    "diametre": "diamètre",
+    "marron": "marron",
+    "gris": "gris"
+  },
+  "order_mode_aliases": {
+    "illico": [
+      "illico",
+      "urgent",
+      "urgence"
+    ],
+    "normale": [
+      "normale",
+      "normal"
+    ],
+    "import": [
+      "import",
+      "commande import",
+      "bono",
+      "بونو"
+    ]
+  },
+  "response_templates": {
+    "ask_num_client": [
+      "عسلامة، قبل كل شي عطيني num client باش نثبت الملف.",
+      "مرحبا، مدلي برقم الحريف باش نجم نكمل معاك.",
+      "أهلا بيك، نحب num client الأول وبعد نثبت الطلبية.",
+      "Marhbe bik, 3atini num client loul bach nthabet el dossier.",
+      "Bonjour, il faut num client d'abord bach nthabet el dossier w nkammel ma3ak."
+    ],
+    "tracking_found": [
+      "ثبتّ الطلبية، حالتها {status}. إذا تحب نعطيك زادة délai نقلك.",
+      "الcommande موجودة وحالتها {status}.",
+      "حسب السيستام، bon de commande {order_id} حالياً {status}."
+    ],
+    "creation_recap": [
+      "نعاودلك التفاصيل قبل validation: {recap}.",
+      "باش ما نغلطوش، هذا اللي ثبت عندي: {recap}.",
+      "مريقل، نلخصلك الطلبية: {recap}. إذا صحيح نعديها."
+    ]
   },
   "slot_patterns": {
-    "customer_id": "\\b(?:CLI|CLT|CLIENT|CUST)[-_]?[A-Z0-9]{3,}\\b"
+    "customer_id": "\\b(?:CLI|CLT|CLIENT|CUST)[-_]?[A-Z0-9]{3,}\\b",
+    "order_id": "\\b(?:ORD|CMD)[-_]?[A-Z0-9]{4,}\\b|\\b(?:bon(?:\\s+de\\s+commande)?|commande)\\b\\s*[:#-]?\\s*\\d{4,8}\\b",
+    "diameter": "\\b(?:diam[eè]tre|diametre)?\\s?(65|70|75)\\b",
+    "lens_code": "\\b(?:code(?:\\s+verre)?|réf(?:érence)?|reference)\\s*[:#-]?\\s*([A-Z0-9]{5,8})\\b",
+    "agence": "\\b(?:Ariana|Aouina|Ben\\s*Arous|Monastir|Sousse|Nabeul|Tunis|Sfax)\\b",
+    "secteur": "\\b(?:marsa\\s*/\\s*lac|marsa|lac|tous\\s+les\\s+clients|centre\\s*ville|trocadero|mourouj)\\b",
+    "delivery_slot": "\\b(?:[01]?\\d|2[0-3]):[0-5]\\d\\b",
+    "quantity": "\\b(?:كعبة|كعبتين|piece|pièce|pieces|pièces)\\b",
+    "axis": "\\b(?:axe|عال|على)\\s?(\\d{1,3})\\b",
+    "addition": "\\b(?:addition|add)\\s?(plus|moins|[+-])?\\s?\\d(?:[.,]\\d{1,2})?\\b"
+  },
+  "optical_extraction_rules": {
+    "normalization_examples": {
+      "moins zéro vingt cinq": "-0.25",
+      "plus zéro vingt cinq": "+0.25",
+      "moins zéro cinquante": "-0.50",
+      "plus zéro cinquante": "+0.50",
+      "moins zéro soixante quinze": "-0.75",
+      "plus zéro soixante quinze": "+0.75",
+      "moins un": "-1.00",
+      "plus un": "+1.00",
+      "moins un vingt cinq": "-1.25",
+      "plus un vingt cinq": "+1.25",
+      "moins un cinquante": "-1.50",
+      "plus un cinquante": "+1.50",
+      "moins un soixante quinze": "-1.75",
+      "plus un soixante quinze": "+1.75",
+      "moins deux": "-2.00",
+      "plus deux": "+2.00",
+      "moins deux vingt cinq": "-2.25",
+      "plus deux vingt cinq": "+2.25",
+      "moins deux cinquante": "-2.50",
+      "plus deux cinquante": "+2.50",
+      "moins deux soixante quinze": "-2.75",
+      "plus deux soixante quinze": "+2.75",
+      "moins trois": "-3.00",
+      "plus trois": "+3.00",
+      "moins trois vingt cinq": "-3.25",
+      "plus trois vingt cinq": "+3.25",
+      "moins trois cinquante": "-3.50",
+      "plus trois cinquante": "+3.50",
+      "moins trois soixante quinze": "-3.75",
+      "plus trois soixante quinze": "+3.75",
+      "moins quatre": "-4.00",
+      "plus quatre": "+4.00",
+      "moins quatre vingt cinq": "-4.25",
+      "plus quatre vingt cinq": "+4.25",
+      "moins quatre cinquante": "-4.50",
+      "plus quatre cinquante": "+4.50",
+      "moins quatre soixante quinze": "-4.75",
+      "plus quatre soixante quinze": "+4.75",
+      "moins cinq": "-5.00",
+      "plus cinq": "+5.00",
+      "moins cinq vingt cinq": "-5.25",
+      "plus cinq vingt cinq": "+5.25",
+      "moins cinq cinquante": "-5.50",
+      "plus cinq cinquante": "+5.50",
+      "moins cinq soixante quinze": "-5.75",
+      "plus cinq soixante quinze": "+5.75",
+      "moins six": "-6.00",
+      "plus six": "+6.00",
+      "moins six vingt cinq": "-6.25",
+      "plus six vingt cinq": "+6.25",
+      "moins six cinquante": "-6.50",
+      "plus six cinquante": "+6.50",
+      "moins six soixante quinze": "-6.75",
+      "plus six soixante quinze": "+6.75",
+      "moins sept": "-7.00",
+      "plus sept": "+7.00",
+      "moins sept vingt cinq": "-7.25",
+      "plus sept vingt cinq": "+7.25",
+      "moins sept cinquante": "-7.50",
+      "plus sept cinquante": "+7.50",
+      "moins sept soixante quinze": "-7.75",
+      "plus sept soixante quinze": "+7.75",
+      "moins huit": "-8.00",
+      "plus huit": "+8.00",
+      "moins huit vingt cinq": "-8.25",
+      "plus huit vingt cinq": "+8.25",
+      "moins huit cinquante": "-8.50",
+      "plus huit cinquante": "+8.50",
+      "moins huit soixante quinze": "-8.75",
+      "plus huit soixante quinze": "+8.75",
+      "moins neuf": "-9.00",
+      "plus neuf": "+9.00",
+      "moins neuf vingt cinq": "-9.25",
+      "plus neuf vingt cinq": "+9.25",
+      "moins neuf cinquante": "-9.50",
+      "plus neuf cinquante": "+9.50",
+      "moins neuf soixante quinze": "-9.75",
+      "plus neuf soixante quinze": "+9.75",
+      "moins dix": "-10.00",
+      "plus dix": "+10.00"
+    },
+    "confirmation_policy": [
+      "Toujours relire les valeurs OD/OG si plusieurs nombres sont donnes dans la meme phrase.",
+      "Pour progressive et bifocal, verifier addition si non donnee.",
+      "Si l'oeil n'est pas explicite, demander clarification plutot que supposer."
+    ]
   },
   "runtime_modes": {
     "default": "autonomous"
   },
   "rag": {
     "source_dirs": [
-      "data/kb",
       "data/rag"
     ],
     "chunk_size": 380,
@@ -292,7 +805,8 @@
     "require_api_key": false
   },
   "database": {
-    "url": "",
-    "echo": false
+    "url": "postgresql+psycopg://callcenter:callcenter@localhost:5432/callcenter",
+    "echo": false,
+    "required_for_production": true
   }
 }

@@ -3,6 +3,8 @@ FastAPI server for the production chatbot.
 """
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -12,6 +14,7 @@ from .config import CFG, DOMAIN_CFG, RUNTIME, logger
 from .inference import load_llm, production_infer
 from .memory import ConversationMemoryStore
 from .rag import VectorRAGRetriever
+from .recommendation import process_recommendation_turn, recommendation_stats, reset_recommendation_sessions
 from .storage import get_database_backend
 from .tools import ToolRegistry, get_tool_registry
 
@@ -136,6 +139,37 @@ class AdminCorrectionResponse(BaseModel):
     approved_dpo: bool = False
 
 
+class RecommendationChatRequest(BaseModel):
+    session_id: str
+    message: str | None = None
+    profile: dict[str, Any] = {}
+    top_k: int = 4
+    reset: bool = False
+
+
+class RecommendationData(BaseModel):
+    lens_type: str
+    index: str
+    treatment: str
+    color: str
+    confidence: float
+    rationale: list[str] = []
+    applied_rules: list[str] = []
+
+
+class RecommendationChatResponse(BaseModel):
+    session_id: str
+    response: str
+    profile: dict[str, Any]
+    extracted_updates: dict[str, Any]
+    incoming_updates: dict[str, Any]
+    missing_fields: list[str]
+    next_questions: list[str]
+    next_question_fields: list[str]
+    recommendation: RecommendationData | None = None
+    rag_results: list[dict[str, Any]] = []
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
     assert _retriever is not None
@@ -162,6 +196,7 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
         result["response"],
         model_variant=req.model_variant,
         metadata={
+            "endpoint": "chat",
             "intent": result["intent"],
             "slots": result["slots"],
             "missing_slots": result.get("missing_slots", []),
@@ -222,6 +257,7 @@ async def health(_: None = Depends(_authorize)) -> dict:
         "models": CFG.available_variants(),
         "rag": retriever_info,
         "learning": _memory_store.learning_stats() if _memory_store is not None else {},
+        "recommendation": recommendation_stats(),
         "database": get_database_backend().health(),
     }
 
@@ -243,7 +279,38 @@ async def tools(_: None = Depends(_authorize)) -> dict:
 @app.post("/reset")
 async def reset(session_id: str | None = None, _: None = Depends(_authorize)) -> dict:
     assert _memory_store is not None
+    reset_recommendation_sessions(session_id=session_id)
     return _memory_store.reset(session_id=session_id)
+
+
+@app.post("/chat/recommendation", response_model=RecommendationChatResponse)
+async def chat_recommendation(req: RecommendationChatRequest, _: None = Depends(_authorize)) -> RecommendationChatResponse:
+    assert _retriever is not None
+
+    result = process_recommendation_turn(
+        session_id=req.session_id,
+        message=req.message,
+        incoming_profile=req.profile,
+        retriever=_retriever,
+        top_k=req.top_k,
+        reset=req.reset,
+    )
+
+    recommendation_payload = result.get("recommendation")
+    recommendation = RecommendationData(**recommendation_payload) if isinstance(recommendation_payload, dict) else None
+
+    return RecommendationChatResponse(
+        session_id=result["session_id"],
+        response=result["response"],
+        profile=result.get("profile", {}),
+        extracted_updates=result.get("extracted_updates", {}),
+        incoming_updates=result.get("incoming_updates", {}),
+        missing_fields=result.get("missing_fields", []),
+        next_questions=result.get("next_questions", []),
+        next_question_fields=result.get("next_question_fields", []),
+        recommendation=recommendation,
+        rag_results=result.get("rag_results", []),
+    )
 
 
 @app.get("/session/{session_id}")

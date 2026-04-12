@@ -1,9 +1,9 @@
 sku,product,index,coating,city,price_min_dt,price_max_dt,stock_policy
-SV150N,single_vision,1.50,none,Tunis,55,70,subject_to_store_stock
-SV156AR,single_vision,1.56,anti_reflective,Tunis,90,110,subject_to_store_stock
-SV156BF,blue_cut,1.56,blue_filter,Sfax,110,130,subject_to_store_stock
-PH160PC,photochromic,1.60,premium_combo,Sousse,190,230,custom_order_2_to_5_days
-PR167PC,progressive,1.67,premium_combo,Tunis,390,460,custom_measurement_required
-PR160AR,progressive,1.60,anti_reflective,Ariana,280,340,custom_measurement_required
-SV160BF,blue_cut,1.60,blue_filter,Tunis,130,155,subject_to_store_stock
-SV150AS,single_vision,1.50,anti_scratch,Nabeul,65,80,subject_to_store_stock
+SIVO-SV150-NONE,single_vision,1.50,none,Tunis,55,75,confirm_backoffice_before_commitment
+SIVO-SV156-AR,single_vision,1.56,anti_reflective,Sfax,85,115,confirm_backoffice_before_commitment
+SIVO-BC156-BF,blue_cut,1.56,blue_filter,Tunis,110,145,confirm_backoffice_before_commitment
+SIVO-PC160-TR,photochromic,1.60,transitions,Sousse,210,260,custom_order_confirmation_required
+SIVO-PG160-AR,progressive,1.60,anti_reflective,Ariana,290,360,custom_measurement_required
+SIVO-PG167-CP,progressive,1.67,crizal_prevencia,Tunis,390,470,custom_measurement_required
+SIVO-BF150-STD,bifocal,1.50,standard,Nabeul,180,240,confirm_backoffice_before_commitment
+SIVO-PG150-SUN,progressive,1.50,sun,Monastir,410,520,custom_measurement_required

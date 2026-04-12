@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CFG, DOMAIN_CFG, HISTORY_DIR, resolve_project_path, logger
+from .domain_utils import canonicalize_intent, canonicalize_slots
 from .storage import get_database_backend
 
 
@@ -65,8 +66,8 @@ def _append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 
 
 def _merge_slots(base: dict[str, Any] | None, updates: dict[str, Any] | None) -> dict[str, Any]:
-    merged = dict(base or {})
-    for key, value in (updates or {}).items():
+    merged = dict(canonicalize_slots(base))
+    for key, value in canonicalize_slots(updates).items():
         if value not in (None, "", []):
             merged[key] = value
     return merged
@@ -227,23 +228,25 @@ class ConversationMemoryStore:
     ) -> dict[str, Any]:
         session = self._touch_session(session_id)
         state = session["state"]
+        intent = canonicalize_intent(intent)
+        slots = canonicalize_slots(slots)
+        normalized_missing = [str(item) for item in missing_slots if item]
+        tool_status = str((tool_result or {}).get("status", "")).lower() if isinstance(tool_result, dict) else ""
+        draft_statuses = {"draft", "collecting", "needs_confirmation", "pending_confirmation"}
+        completed_statuses = {"ok", "created", "confirmed", "completed"}
 
         state["current_intent"] = intent
         if intent not in {"unknown", "greeting", "thanks"}:
             state["active_intent"] = intent
         state["slots"] = _merge_slots(state.get("slots", {}), slots)
-        state["missing_slots"] = list(missing_slots)
+        state["missing_slots"] = list(dict.fromkeys(normalized_missing))
         state["review_required"] = review_required
-        state["open_form"] = bool(missing_slots) or review_required
+        state["open_form"] = bool(state["missing_slots"]) or review_required or tool_status in draft_statuses
         if tool_call is not None:
             state["last_tool_call"] = tool_call
         if tool_result is not None:
             state["last_tool_result"] = tool_result
-            if isinstance(tool_result, dict) and str(tool_result.get("status", "")).lower() in {
-                "ok",
-                "created",
-                "confirmed",
-            }:
+            if isinstance(tool_result, dict) and tool_status in completed_statuses:
                 state["customer_context"] = _merge_slots(
                     state.get("customer_context", {}),
                     {
@@ -255,6 +258,11 @@ class ConversationMemoryStore:
                 if tool_call is not None and not missing_slots and not review_required:
                     state["open_form"] = False
                     state["missing_slots"] = []
+            elif isinstance(tool_result, dict) and tool_status in draft_statuses:
+                extra_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
+                if extra_missing:
+                    state["missing_slots"] = list(dict.fromkeys([*state["missing_slots"], *extra_missing]))
+                state["open_form"] = True
         self._save_state()
         return copy.deepcopy(state)
 
@@ -333,7 +341,9 @@ class ConversationMemoryStore:
         draft_response = str(last_exchange.get("assistant", ""))
         metadata = dict(last_exchange.get("metadata", {}) or {})
 
-        final_intent = corrected_intent or state.get("current_intent") or state.get("active_intent") or "unknown"
+        final_intent = canonicalize_intent(
+            corrected_intent or state.get("current_intent") or state.get("active_intent") or "unknown"
+        )
         final_slots = _merge_slots(state.get("slots", {}), corrected_slots or {})
         final_response = corrected_response or draft_response
 

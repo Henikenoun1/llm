@@ -1,4 +1,152 @@
-{"intent":"price_inquiry","user":"قداش سوم البلارات البروقرسيف 1.67؟","assistant":"بالنسبة للبلارات progressive indice 1.67، نثبتلك السوم من الكاتالوغ ونرجعلك بالمعلومة الدقيقة."}
-{"intent":"store_info","user":"وقتاش يفتح المحل في صفاقس؟","assistant":"نثبتلك تو أوقات الخدمة في فرع صفاقس ونقولك بالتحديد وقتاش يفتح ويسكر."}
-{"intent":"order_tracking","user":"نحب نتبع الكوموند ORD-ABC12345","assistant":"أكيد، مدلي رقم الكوموند وإذا يلزم رقم الهاتف باش نثبتلك الحالة متاع الطلبية."}
-{"intent":"appointment_booking","user":"نحب رنديفو في سوسة نهار 2026-03-15 على 10:00","assistant":"نجم نعاونك، يلزمني المدينة والتاريخ والوقت ورقم الهاتف باش نثبت الحجز."}
+{"intent":"get_num_client","agent":"صباح النور، مرحبا بيك. عيشك عطيني num client باش نفتح dossier متاعك ومن بعد نحكيلك شنية يلزم.","opticien":"الو صباح الخير"}
+{"intent":"get_num_client","agent":"مرحبا، ثبتّ num client 3310. تفضل شنية الطلب متاعك، suivi commande ولا création commande ؟","opticien":"bonjour معاك 3310"}
+{"intent":"get_num_client","agent":"عسلامة، مرحبا. قبل كل شي عطيني num client باش نثبت identité متاعك وندخل للملف الصحيح.","opticien":"عسلامة نحب نسأل على commande متاعي"}
+{"intent":"get_num_client","agent":"إي وصلني num client 1601. تفضل، تحب تتبع commande والا باش تعدي commande جديدة؟","opticien":"allo 16 01"}
+{"intent":"get_num_client","agent":"مريقل، num client 481 حاضر. تفضل مدلي les détails متاع البلارة والتريتمنت باش نبدأ نسجل.","opticien":"معاك 481 و نحب نعدي بلارة"}
+{"intent":"get_num_client","agent":"صباح النور، num client 5007 واضح. قلّي توة شنية حاجتك بالضبط باش نعاونك بسرعة.","opticien":"صباح الخير 5007"}
+{"intent":"get_num_client","agent":"مرحبا، ثبتّ num client 3310. تفضل شنية الcommande متاعك؟","opticien":"الو 3310"}
+{"intent":"get_num_client","agent":"عالسلامة، num client 4098 واضح. كيفاش نجم نعاونك؟","opticien":"عسلامة 4098"}
+{"intent":"get_num_client","agent":"Bonjour، num client 5007 وصلني. قولي شنوة تحب تعمل؟","opticien":"bonjour 5007 معاك"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 1813. تفضل شنوة حاجتك؟","opticien":"الو معاك 1813"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 1470. تفضل شنوة حاجتك؟","opticien":"صباح الخير 1470"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 662. تفضل شنوة حاجتك؟","opticien":"allo 662"}
+{"intent":"get_num_client","agent":"مرحبا، ثبتّ num client 1701. تفضل شنية الcommande متاعك؟","opticien":"سلام 1701"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 1601. تفضل شنوة حاجتك؟","opticien":"عالسلامة 1601"}
+{"intent":"get_num_client","agent":"عالسلامة، num client 5088 واضح. كيفاش نجم نعاونك؟","opticien":"bonjour 5088"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 50244. تفضل شنوة حاجتك؟","opticien":"الو 50244"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 51088. تفضل شنوة حاجتك؟","opticien":"مرحبا 51088"}
+{"intent":"get_num_client","agent":"Bonjour، num client 7005 وصلني. قولي شنوة تحب تعمل؟","opticien":"صباح النور 7005"}
+{"intent":"get_num_client","agent":"Bonjour، num client 1183 وصلني. قولي شنوة تحب تعمل؟","opticien":"عسلامة 1183"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 4018. تفضل شنوة حاجتك؟","opticien":"الو 4018"}
+{"intent":"get_num_client","agent":"عالسلامة، num client 51200 واضح. كيفاش نجم نعاونك؟","opticien":"مرحبا 51200"}
+{"intent":"get_num_client","agent":"صباح النور، معاك num client 5002. تفضل شنوة حاجتك؟","opticien":"bonjour 5002"}
+{"intent":"get_num_client","agent":"Bonjour، num client 8741 وصلني. قولي شنوة تحب تعمل؟","opticien":"الو معاك 8741"}
+{"intent":"get_num_client","agent":"عالسلامة، عيشك عطيني num client الأول باش نثبت dossier متاعك.","opticien":"الو صباح الخير"}
+{"intent":"get_num_client","agent":"تفضل، مدلي num client الأول وبعد نحكيو على الcommande.","opticien":"عسلامة باللهي"}
+{"intent":"get_num_client","agent":"عالسلامة، عيشك عطيني num client الأول باش نثبت dossier متاعك.","opticien":"bonjour نحب نسأل"}
+{"intent":"get_num_client","agent":"مرحبا، قبل كل شي مدلي num client باش نجم نعاونك.","opticien":"الو تفضل"}
+{"intent":"get_num_client","agent":"تفضل، مدلي num client الأول وبعد نحكيو على الcommande.","opticien":"صباح النور حبيت نثبت"}
+{"intent":"get_num_client","agent":"عالسلامة، عيشك عطيني num client الأول باش نثبت dossier متاعك.","opticien":"سلام نحب معلومة"}
+{"intent":"get_num_client","agent":"تفضل، مدلي num client الأول وبعد نحكيو على الcommande.","opticien":"allo عندي demande"}
+{"intent":"get_num_client","agent":"تفضل، مدلي num client الأول وبعد نحكيو على الcommande.","opticien":"bonjour نحب نعدي commande"}
+{"intent":"get_num_client","agent":"Bonjour، عيشك أعطيني num client باش نثبت في السيستام.","opticien":"عسلامة نحب نتبع commande"}
+{"intent":"get_num_client","agent":"عالسلامة، عيشك عطيني num client الأول باش نثبت dossier متاعك.","opticien":"الو نحب نشوف situation متاع commande"}
+{"intent":"get_num_client","agent":"مرحبا، قبل كل شي مدلي num client باش نجم نعاونك.","opticien":"صباح الخير عندي réclamation"}
+{"intent":"get_num_client","agent":"عالسلامة، عيشك عطيني num client الأول باش نثبت dossier متاعك.","opticien":"سلام باللهي نحب نعمل  commande illico"}
+{"intent":"get_num_client","agent":"تفضل، مدلي num client الأول وبعد نحكيو على الcommande.","opticien":"allo نحب نسأل على verre"}
+{"intent":"get_num_client","agent":"مرحبا، قبل كل شي مدلي num client باش نجم نعاونك.","opticien":"مرحبا نحب نثبت disponibilité"}
+{"intent":"get_num_client","agent":"صباح النور، يلزمني num client في الأول باش نطلعلك على الملف.","opticien":"bonjour نحب نعرف وين واصلة commande"}
+{"intent":"get_num_client","agent":"Bonjour، عيشك أعطيني num client باش نثبت في السيستام.","opticien":"عسلامة عندي ordonnance ونحب نعدي"}
+{"intent":"get_num_client","agent":"مرحبا، قبل كل شي مدلي num client باش نجم نعاونك.","opticien":"الو نحب نبدل traitement"}
+{"intent":"create_order","agent":"بلاهي كان تجم تعطيني  num client الأول، وبعد نثبت معاك verre و traitement و diamètre باش نسجل  commande correctement.","opticien":"بربي نحب نعدي  commande في Varilux liberty short على orma crizal prevencia diamètre 70"}
+{"intent":"create_order","agent":"أكيد، مدلي num client في الأول، وبعد نعاودلك الكمية والcoloration باش نثبت الcommande.","opticien":"نحب نعدي كعبتين orma blanc diamètre 65 coloration marron cent pour cent"}
+{"intent":"create_order","agent":"حاضر، عطيني num client باش نفتح dossier، وبعد نكمل معاك illico ولا normale.","opticien":"bonjour نحب  commande illico progressive crizal prevencia short"}
+{"intent":"create_order","agent":"مريقل، قبل ما نسجل  commande عطيني num client، وبعد نثبت معاك maxi و coloration.","opticien":"عندي ordonnance ونحب نعدي maxi gris dégradé كعبتين"}
+{"intent":"create_order","agent":"صباح النور، num client 1470 واضح. تفضل قولي référence والpuissance باش نسجل commande.","opticien":"الو معاك 1470 نحب نعدي  commande orma marron"}
+{"intent":"create_order","agent":"ثبتّ num client 1813. نعاود معاك type du verre والtraitement والdiamètre باش نعديها صحيحة.","opticien":"معاك 1813 باش نعدي top 28 bifocal minéral sans traitement"}
+{"intent":"create_order","agent":"مرحبا، num client 5007 حاضر. نثبت معاك إذا هي bifocal top 28 ولا progressive، وبعد نسجل commande.","opticien":"صباح الخير 5007 نحب نعدي progressive minéral موش progressive bifocal"}
+{"intent":"create_order","agent":"أكيد، عطيني num client في الأول، وبعد نحدد type verre fabrication والcoloration.","opticien":"عسلامة نحب نعدي verre fabrication avec coloration gris dégradé"}
+{"intent":"create_order","agent":"مريقل، num client 4098 حاضر. نثبت معاك produit Stellest والtraitement وبعد نعدي  commande import.","opticien":"bonjour 4098 نحب نعدي  commande import Stellest"}
+{"intent":"create_order","agent":"عيشك عطيني num client الأول، وبعد نثبت إذا تحبها illico ولا  commande normale.","opticien":"الو نحب نعدي  commande crizal prevencia urgent"}
+{"intent":"create_order","agent":"num client 662 واضح. تفضل أعطيني correction كاملة باش نسجل الكعبة.","opticien":"معاك 662 نحب كعبة ormex crizal prevencia diamètre 70"}
+{"intent":"create_order","agent":"مريقل، قبل كل شي عطيني num client، وبعد نثبت معاك premium orma والpuissances.","opticien":"نحب نعدي deux pièces premium orma"}
+{"intent":"create_order","agent":"صباح النور، num client 3310 موجود. تفضل كمللي type du verre والquantité باش نسجل commande.","opticien":"الو 3310 نحب نعدي  commande في بلارات 16 83"}
+{"intent":"create_order","agent":"أكيد، عطيني num client، وبعد نثبت معاك الtraitement والcoloration.","opticien":"bonjour نحب نعدي  commande avec anti-reflet et coloration marron"}
+{"intent":"create_order","agent":"ثبتّ num client 1701. قولي إذا تحب rock ولا easy pro، وبعد نكمل inscription.","opticien":"سلام 1701 نحب نعمل  commande pour myopie produit Stellest"}
+{"intent":"create_order","agent":"يلزمني num client في الأول، وبعد نثبت معاك diamètre والتصحيحة باش نعديها.","opticien":"نحب نعدي كعبة واحدة ormex prevencia"}
+{"intent":"create_order","agent":"مرحبا، num client 5002 حاضر. نثبت معاك référence stock والquantité وبعد نسجل الطلب.","opticien":"الو 5002 نحب  commande stock verres de stock"}
+{"intent":"create_order","agent":"مدلي num client الأول، وبعد نحدد مع بعضنا type fabrication والindice.","opticien":"عالسلامة نحب نعدي  commande fabrication pour progressive 1.67"}
+{"intent":"create_order","agent":"ثبتّ num client 8741. نثبت معاك produit والdurée: illico ولا normale حسب disponibilité.","opticien":"bonjour 8741 نحب نعدي  commande illico غدوة تكون عندي"}
+{"intent":"create_order","agent":"أكيد، عطيني num client الأول، وبعد نثبت معاك type du verre والtraitement bleu cut.","opticien":"صباح الخير نحب نعدي كعبتين bleu cut"}
+{"intent":"create_order","agent":"num client 1601 حاضر. قولي شنية référence والproduit باش نسجل bon de  commande import.","opticien":"الو معاك 1601 نحب نعدي  commande import en bon de commande"}
+{"intent":"create_order","agent":"عيشك عطيني num client، وبعد نعاودلك orma blanc diamètre 70 sans traitement قبل التسجيل.","opticien":"بربي نحب نعدي  commande في orma blanc diamètre 70 sans traitement"}
+{"intent":"create_order","agent":"مدلي num client في الأول، وبعد نفسرولك شنية اللي ينجم يتعدى stock وشنية fabrication.","opticien":"نحب نعدي verre de stock plus fabrication لزوج"}
+{"intent":"create_order","agent":"قبل ما نبدأ، عطيني num client باش نطلع على dossier وبعد نكمل création.","opticien":"bonjour نحب نثبت avant de créer  commande progressive liberty"}
+{"intent":"create_order","agent":"مرحبا، num client 4018 موجود. نجم نثبت معاك correction سطر بسطر وبعد نعديها.","opticien":"الو 4018 عندي correction جاهزة ونحب نعدي commande"}
+{"intent":"create_order","agent":"أكيد، عطيني num client الأول، وبعد نحدد produit Stellest والtraitement.","opticien":"عسلامة نحب نعدي  commande lunettes enfant avec Stellest"}
+{"intent":"create_order","agent":"عيشك عطيني num client، وبعد نثبت معاك الكمية والcoloration والدiamètre.","opticien":"الو نحب  commande pour deux pièces orma marron dégradé"}
+{"intent":"create_order","agent":"ثبتّ num client 51088. تفضل أعطيني تفاصيل verre والcorrection ونعديهالك normale.","opticien":"bonjour 51088 نحب نعدي  commande normale موش illico"}
+{"intent":"create_order","agent":"قبل كل شي عطيني num client، وبعد نثبت معاك bifocal flat top 28 والdiamètre.","opticien":"نحب نعدي  commande pour bifocal flat top 28"}
+{"intent":"create_order","agent":"num client 51200 واضح. قولي type du verre والcorrection باش نكمل inscription.","opticien":"الو 51200 نحب  commande crizal avec diamètre 65"}
+{"intent":"create_order","agent":"مريقل، عطيني num client في الأول وبعد نثبت contenu du bon de commande.","opticien":"صباح الخير نحب نبعث bon de  commande fabrication"}
+{"intent":"create_order","agent":"ثبتّ num client 5001. نثبت معاك type du verre والanti-UV وبعد نسجل الcommande.","opticien":"bonjour 5001 نحب  commande مع traitement anti-UV"}
+{"intent":"create_order","agent":"أكيد، قبل ما نبدأ يلزمني num client. وبعد نعاود معاك verre, traitement و diamètre باش تتسجل commande صحيح.","opticien":"بربي نحب نعدي commande في Varilux liberty short على orma crizal prevencia diamètre 70"}
+{"intent":"create_order","agent":"مريقل سي 3310. نثبت معاك: كعبتين orma، coloration marron 100%. إذا تحب زادة عطيني diamètre والقيم باش نكمل création commande.","opticien":"معاك 3310 نحب نعدي كعبتين orma marron cent pour cent"}
+{"intent":"create_order","agent":"مرحبا، num client 5008 واضح. نعاود معاك: top 28 bifocal minéral sans traitement. كان عندك diamètre والقيم متاع العينين نعبيهم توة.","opticien":"الو 5008، نحب commande top 28 bifocal minéral sans traitement"}
+{"intent":"create_order","agent":"نجم نعاونك، أما الأول عطيني num client. بعد نثبتلك produit stellest ونفسرلك إذا فيه variant واحد ولا أكثر قبل ما نسجل commande.","opticien":"bonjour نحب نعدي commande stellest avec s أما ما نعرفش إذا فمّا نوع واحد والا لا"}
+{"intent":"create_order","agent":"حاضر، num client 1601 موجود. بما إنك قلت illico، نثبت معاك إذا هالréférence تعدي illico ولا fabrication عادية، وبعد نكمل création commande.","opticien":"معاك 1601 باش نعدي illico على Varilux liberty short prevencia"}
+{"intent":"create_order","agent":"أكيد، أما يلزمني num client الأول. بعد نكمل معاك référence 16 83، nombre de pièces، coloration marron و type de verre باش نسجل bon de commande.","opticien":"بلاهي نحب نعدي بلارات 16 83 كعبتين coloration marron في orma"}
+{"intent":"create_order","agent":"مريقل 4022. باش نعاودهم معاك قبل création commande: OD -0.75 cyl +2 axe 75، و OG +1.75. كان فما add ولا diamètre زيدهملي باش نسجل dossier كامل.","opticien":"معاك 4022، OD moins zéro soixante quinze cylindre plus deux axe 75 و OG plus un soixante quinze"}
+{"intent":"create_order","agent":"حاضر، num client 5100 واضح. بما إنها commande import، عطيني bon de commande والتفاصيل الكاملة متاع produit باش نعديها correctement في système.","opticien":"allo 5100 نحب نعدي commande import lentilles avec bon de commande"}
+{"intent":"create_order","agent":"أكيد، عطيني num client الأول، وبعد نثبت معاك premium والindice والtraitement.","opticien":"عسلامة نحب نعدي  commande في verre progressif premium"}
+{"intent":"create_order","agent":"حاضر، num client 2021 واضح. نثبت معاك قبل création commande: OD +2.25 cyl -0.75 axe 100، و OG +2.50، coloration marron dégradé. إذا فما diamètre ولا type de verre زيدهملي باش نكمل dossier.","opticien":"الو 2021 معاك plus deux vingt cinq moins zéro soixante quinze عال 100 و عين ليسار plus deux cinquante marron dégradé"}
+{"intent":"create_order","agent":"ثبتّ num client 3310. فهمت référence 16 83، كعبتين، coloration marron، matière orma، diamètre 70. نثبت زادة إذا فما traitement ولا correction باش نسجل bon de commande كامل.","opticien":"3310 معاك 16 83 كعبتين marron في orma diamètre 70"}
+{"intent":"create_order","agent":"مريقل، num client 5100 موجود. بما إنها commande import avec bon de commande 88421، فهمت produit ormex avec crizal prevencia، كعبة واحدة diamètre 70. إذا فما sphère ولا cylindre ولا axe عطيني زادة باش نكمل création.","opticien":"5100 avec bon de commande import 88421 lentilles ormex crizal prevencia كعبة واحدة diamètre 70"}
+{"intent":"create_order","agent":"حاضر، num client 4022 واضح. نعاودهم معاك: OD -0.75 cyl +2 axe 75، و OG +1.75. إذا فما add ولا diamètre ولا traitement زيدهملي قبل ما نسجل commande.","opticien":"4022 عين ليمين  moins zéro soixante quinze cylindre plus deux axe 75 و عين ليسار plus un soixante quinze"}
+{"intent":"create_order","agent":"ثبتّ num client 1601. فهمت Varilux liberty short prevencia diamètre 70 avec addition +1.50 وبما إنها illico نثبت إذا référence تعدّي illico ولا fabrication عادية، وبعد نكمل creation commande.","opticien":"1601 illico Varilux liberty short prevencia diamètre 70 addition un cinquante"}
+{"intent":"create_order","agent":"صحيح، num client 1450 موجود. فهمت top 28 bifocal minéral sans traitement diamètre 65. إذا عندك correction OD و OG عطيني ياهم باش نسجل commande كاملة.","opticien":"1450 top 28 bifocal minéral sans traitement diamètre 65"}
+{"intent":"create_order","agent":"حاضر، num client 1813 واضح. فهمت Stellest Rock sur Airwear، OD -2.25، و OG -1.90. إذا فما cylindre ولا axe ولا diamètre نزيد نثبتهم معاك قبل création commande.","opticien":"1813 Stellest Rock Airwear droite moins deux vingt cinq gauche moins un quatre vingt dix"}
+{"intent":"create_order","agent":"ثبتّ num client 5931. باش نسجل progressive minéral diamètre 70 sans traitement، OD -4.00 و OG -3.50 axe 170. إذا فما cylindre ولا addition ناقصين زيدهملي باش يكون dossier صحيح.","opticien":"5931 progressive minéral diamètre 70 sans traitement عين ليمين  moins quatre و OG moins trois cinquante axe 170"}
+{"intent":"create_order","agent":"مريقل، num client 1701 موجود. نثبت commande: liberty short avec crizal prevencia sur orma diamètre 70، OD -1.50 / +1.25 axe 20، OG -1.00 / +1.00 axe 165. إذا فما addition زيدهاولي ونكمل التسجيل.","opticien":"1701 liberty short crizal prevencia orma 70 OD moins un cinquante plus un vingt cinq axe 20 OG moins un plus un axe 165"}
+{"intent":"create_order","agent":"حاضر، num client 662 واضح. فهمت premium orma، كعبتين، coloration gris dégradé، diamètre 75. إذا فما référence ولا correction ولا traitement، نزيد نثبتهم معاك قبل ما نعدي commande.","opticien":"662 premium orma كعبتين gris dégradé diamètre 75"}
+{"intent":"create_order","agent":"ثبتّ num client 2868. فهمت unifocal avec traitement AR، sphère +0.50، cylindre -0.50، axe 90. إذا هاذي للعين اليمين فقط ولا زوز عيون، وضحلي باش نسجلها correctement.","opticien":"2868 unifocal AR plus zéro cinquante moins zéro cinquante axe 90"}
+{"intent":"create_order","agent":"حاضر، num client 4098 موجود. باش نسجل orma blanc diamètre 65 coloration marron cent pour cent، OD sphère -0.25 cyl +0.75، و OG sphère -0.25 cyl +1.00. إذا فما axe للعينين عطيني ياهم زادة.","opticien":"4098 orma blanc 65 marron cent pour cent OD sphère moins zéro vingt cinq cylindre plus zéro soixante quinze OG sphère moins zéro vingt cinq cylindre plus un"}
+{"intent":"create_order","agent":"ثبتّ num client 2250. فهمت progressive premium indice 1.67 avec prevencia، coloration brun dégradé، addition +2.00. باقي نثبت correction و diamètre باش نكمل création commande.","opticien":"2250 progressive premium 1.67 prevencia brun dégradé addition deux"}
+{"intent":"create_order","agent":"مريقل، num client 3144 واضح. فهمت كعبتين photochromique gris diamètre 70، OD -3.00 و OG -2.50. إذا فما cylindre ولا axe نزيد نثبتهم معاك قبل التسجيل النهائي.","opticien":"3144 كعبتين photochromique gris diamètre 70 droite moins trois gauche moins deux cinquante"}
+{"intent":"create_order","agent":"حاضر، num client 4771 موجود. فهمت orma avec traitement crizal prevencia، OD +1.25 و OG +0.50. إذا فما diamètre ولا référence produit نزيد ناخذهم منك باش يكون bon de commande كامل.","opticien":"4771 crizal prevencia only sur orma droite plus un vingt cinq gauche plus zéro cinquante"}
+{"intent":"create_order","agent":"ثبتّ num client 5206. باش نسجل bifocal 28 minéral 1.5 PEG diamètre 65 avec addition +3.00. إذا عندك sphère و cylindre و axe للعينين عطيني ياهم باش نكمل.","opticien":"5206 bifocal 28 minéral 1.5 PEG diamètre 65 addition trois"}
+{"intent":"create_order","agent":"مريقل، num client 6088 واضح. فهمت liberty newgen indice 1.60 anti-reflet، sphère +2.00، cylindre -1.00، axe 80. إذا هاذي لعين واحدة فقط قليلي زادة OG شنية وضعيتها.","opticien":"6088 liberty newgen 1.60 anti reflet plus deux moins un عال 80"}
+{"intent":"create_order","agent":"حاضر، num client 7310 موجود. بما إنها lentilles import avec bon 99014، فهمت 6 boites base curve 8.6 puissance -3.50. إذا فما marque ولا diamètre lens نزيد نثبتهم معاك.","opticien":"7310 lentilles import bon 99014 6 boites rayon 8.6 puissance moins trois cinquante"}
+{"intent":"create_order","agent":"ثبتّ num client 8442. فهمت verre solaire polarisée marron diamètre 75 avec +0.75. إذا فما cylindre ولا référence monture ولا quantité، زيدهملي باش نكمل création commande.","opticien":"8442 solaire polarisée marron diamètre 75 plus zéro soixante quinze"}
+{"intent":"create_order","agent":"حاضر، num client 9055 واضح. باش نسجل progressive indice 1.74 noir dégradé، OD -6.00، OG -5.50، addition +2.50. باقي نثبت إذا فما cylindre و axe و diamètre قبل التسجيل النهائي.","opticien":"9055 progressive 1.74 noir dégradé عين ليمين  moins six عين ليسار moins cinq cinquante addition deux cinquante"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client باش نثبتلك الحالة متاع bon de  commande 70012.","opticien":"نحب نتبع  commande 70012"}
+{"intent":"order_tracking","agent":"صباح النور، مدلي num client الأول باش نثبتلك وضعية  commande illico-108.","opticien":"الو وين واصلة  commande illico-108"}
+{"intent":"order_tracking","agent":"مرحبا، num client 5007 واضح. لحظة نثبتلك bon de  commande 70007 ونرجعلك بالحالة.","opticien":"bonjour 5007 نحب نعرف حالة bon de  commande 70007"}
+{"intent":"order_tracking","agent":"عيشك عطيني num client باش نثبتلك délai ووين وصلت  commande import-022.","opticien":"عالسلامة عندي  commande import-022 وقتاش تكون prête"}
+{"intent":"order_tracking","agent":"ثبتّ num client 50244. تو نثبتلك bon 81012 ونقولك إذا مازالت validée ولا خرجت.","opticien":"الو معاك 50244 ونحب نتبع  commande 81012"}
+{"intent":"order_tracking","agent":"مرحبا، num client 3310 حاضر. إذا تعرف bon de  commande قلهولي، وإلا نثبتلك بملفك.","opticien":"سلام 3310  commande متاعي مازالت ما جاتش"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client في الأول وإذا عندك bon de  commande زادة خير.","opticien":"bonjour نحب نعرف وين واصلة commande"}
+{"intent":"order_tracking","agent":"num client 4098 واضح. نثبتلك على  commande illico ونقولك إذا غدوة prête ولا مزال.","opticien":"الو 4098 نحب نثبت على  commande illico غدوة تجي ولا لا"}
+{"intent":"order_tracking","agent":"مدلي num client باش نثبتلك وضعية bon 54892 بالتحديد.","opticien":"عسلامة  commande 54892 شنيا وضعيتها"}
+{"intent":"order_tracking","agent":"ثبتّ num client 1701. لحظة نراجع bon 70031 ونرجعلك بالحالة.","opticien":"سلام 1701 عندي bon de  commande 70031"}
+{"intent":"order_tracking","agent":"عيشك عطيني num client وإذا عندك bon de  commande يكون خير باش نثبتلك  commande Stellest.","opticien":"الو وين وصلت  commande متاع Stellest"}
+{"intent":"order_tracking","agent":"num client 1601 موجود. إذا تعطيني bon de  commande نجم نعطيك réponse أدق على délai.","opticien":"bonjour 1601 نحب نعرف délai متاع  commande import"}
+{"intent":"order_tracking","agent":"صباح النور، num client 1813 واضح. نثبتلك مباشرة على bon 70018.","opticien":"معاك 1813 bon 70018"}
+{"intent":"order_tracking","agent":"مرحبا، num client 5002 حاضر. مدلي bon de  commande باش نطلعلك على fabrication بالضبط.","opticien":"الو 5002 عندي  commande fabrication"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client وإذا تعرف référence ولا bon de  commande قلهولي.","opticien":"عالسلامة نحب نتبع  commande de stock"}
+{"intent":"order_tracking","agent":"ثبتّ num client 8741. إذا عندك bon de  commande نثبتلك الحالة في الحين.","opticien":"bonjour 8741 وين واصلة  commande normale"}
+{"intent":"order_tracking","agent":"مريقل، num client 4018 موجود. قولي bon de  commande باش نحددلك أي  commande بالضبط.","opticien":"الو 4018 مازلت نستنى في commande"}
+{"intent":"order_tracking","agent":"مدلي num client الأول، وبعد إذا عندك bon de  commande نعطيك الحالة بالتحديد.","opticien":"سلام نحب نعرف  commande متاعي validée ولا livrée"}
+{"intent":"order_tracking","agent":"ثبتّ num client 51088. تو نشوفلك bon 70044 ونقولك إذا خرجت للتسليم ولا لا.","opticien":"الو معاك 51088 bon 70044"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client باش نثبتلك سبب التأخير في bon 81005.","opticien":"bonjour  commande 81005 تأخرت برشة"}
+{"intent":"order_tracking","agent":"عيشك مدلي num client باش نراجعلك bon 70050.","opticien":"عالسلامة نحب نثبت إذا  commande 70050 annulée ولا لا"}
+{"intent":"order_tracking","agent":"num client 51200 واضح. إذا عندك bon de  commande نعطيك الحالة بدقة على  commande crizal prevencia.","opticien":"الو 51200 وين وصلت  commande crizal prevencia"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client باش نثبتلك bon 70003.","opticien":"صباح الخير نحب نعرف bon de  commande 70003"}
+{"intent":"order_tracking","agent":"ثبتّ num client 5001. لحظة نراجع  commande site 81001 ونرجعلك بالحالة.","opticien":"الو 5001 نحب نثبت على  commande site 81001"}
+{"intent":"order_tracking","agent":"يلزمني num client في الأول، وإذا تعرف bon de  commande نثبتلك أسرع.","opticien":"bonjour نحب suivre  commande import"}
+{"intent":"order_tracking","agent":"مرحبا، num client 7005 حاضر. مدلي bon de  commande باش نعرف إذا urgent تعدات ولا لا.","opticien":"سلام 7005 عندي  commande urgent"}
+{"intent":"order_tracking","agent":"ثبتّ num client 662. إذا تعطيني bon de  commande نثبتلك حالة fabrication.","opticien":"الو 662  commande متاعي fabrication"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client باش نطلعلك على bon 81020.","opticien":"عالسلامة bon 81020"}
+{"intent":"order_tracking","agent":"num client 1183 واضح. إذا عندك bon de  commande زيد قلهولي باش نعطيك délai مضبوط.","opticien":"bonjour معاك 1183 نحب نعرف وقتاش تخرج commande"}
+{"intent":"order_tracking","agent":"مدلي num client الأول باش نثبتلك الحالة متاع illico-020.","opticien":"الو وين واصلة  commande illico-020"}
+{"intent":"order_tracking","agent":"ثبتّ num client 5008. تو نراجعلك bon 70008 ونقولك شنيا وضعيتو.","opticien":"سلام 5008 نحب وضعية  commande 70008"}
+{"intent":"order_tracking","agent":"مرحبا، num client 5046 موجود. لحظة نثبتلك bon 70046.","opticien":"bonjour 5046 bon 70046"}
+{"intent":"order_tracking","agent":"أكيد، عطيني num client وإذا عندك bon de  commande يكون أوضح باش نثبتلك الcommande.","opticien":"الو نحب نتبع  commande متاع top 28 bifocal"}
+{"intent":"order_tracking","agent":"أكيد، عيشك عطيني num client باش نثبتلك bon de commande 70007 ونقولك وين واصل.","opticien":"عسلامة نحب نتبع commande 70007"}
+{"intent":"order_tracking","agent":"مرحبا، num client 5007 حاضر. لحظة نثبتلك bon de commande 70007 ونرجعلك بالحالة والدélai إذا موجود.","opticien":"bonjour 5007 نحب نعرف حالة bon de commande 70007"}
+{"intent":"order_tracking","agent":"إي num client 3310 واضح. مدلي كان bon de commande إذا موجود، وإذا لا نثبتلك آخر commandes illico المسجلين باسمك.","opticien":"الو معاك 3310، commande illico متاعي حضرت والا مازال؟"}
+{"intent":"order_tracking","agent":"مريقل، num client 1601 وbon 81012 واضحين. تو نثبتلك إذا هي validée، en préparation، والا خرجت للتسليم.","opticien":"سلام 1601، bon 81012 وين وصل؟"}
+{"intent":"order_tracking","agent":"أكيد، num client 5002 حاضر. نثبتلك commande import-102 ونقولك إذا مازالت en préparation ولا prête للاستلام.","opticien":"معاك 5002، نحب نعرف commande import-102 prête والا لا"}
+{"intent":"order_tracking","agent":"لا بأس، بما إن num client 481 موجود، ننجم نخرجلك آخر commandes المسجلين باسمك ومن بعد تحددلي أنهي وحدة تحب تتبع.","opticien":"بربي عندي num client 481 أما نسيت bon de commande، نحب نتبع commande"}
+{"intent":"delivery_schedule","opticien":"agence aouina secteur marsa / lac, prochain creneau?","agent":"Pour Aouina / marsa-lac, les creneaux sont 9h30, 12h00, 15h30. Ken ta3tini wa9t el passage n9olek presque wa9teh bech tousel."}
+{"intent":"reference_confirmation","opticien":"code verre 25YXSU, tnajem tthabetli?","agent":"Oui, 25YXSU correspond a Varilux X Design Orma SUN. Na9dar n3awnek b diametre et options zeda."}
+{"intent":"availability_inquiry","opticien":"dispo 366C10 airwear diametre 65?","agent":"Nethabethelk code 366C10 (Airwear, diametre 65) w narja3lek b confirmation sans estimation ghalta."}
+{"intent":"delivery_schedule","opticien":"bonjour, planning livraison ben arous secteur mourouj, wa9tech el passage jey?","agent":"Pour Ben Arous / Mourouj, nethabet el secteur w n9olek prochaine fenetre de passage approximative sans promesse exacte."}
+{"intent":"delivery_schedule","opticien":"aslema, agence sousse secteur trocadero, fama creneau ba3d 12h?","agent":"Mriguel, pour Sousse / Trocadero najem na3tik el creneaux mta3 el jour w eni n9olek next slot approximatif."}
+{"intent":"reference_confirmation","opticien":"rani nheb confirmation mta3 code 39D7AQ avant ma naadi commande","agent":"Nethabet code 39D7AQ men catalogue, w n9olek esm el verre, matiere, w diametre ken mawjoudin."}
+{"intent":"reference_confirmation","opticien":"bonjour, ref 16 83 sahih wala le?","agent":"Oui, nethabet ref 1683 men les sources mta3na, ama ma n9oulch haja mech confirmed."}
+{"intent":"availability_inquiry","opticien":"aslema, dispo 25YXSU orma sun diametre 65?","agent":"Nethabet dispo mta3 25YXSU Orma SUN w narja3lek b jawab mezyen: disponible, sur commande, wala confirmation mazelt matloub."}
+{"intent":"availability_inquiry","opticien":"nheb na3ref ken progressive 1.67 crizal prevencia mawjouda fi tunis","agent":"Pour progressive 1.67 crizal prevencia, najem na3tik indication men catalog ama confirmation stock finale lazem men source mo2akkda."}
+{"intent":"price_inquiry","opticien":"bonjour, 9adech prix progressive 1.67 fi Tunis?","agent":"Pour progressive 1.67 fi Tunis, n9adar na3tik fourchette indicative bark. El prix final yet2akked men catalogue commercial w config exacte."}
+{"intent":"store_info","opticien":"wa9tech yethal centre Sousse?","agent":"Coordination Sousse yekhdem généralement mel 08:30 lel 17:30, w nhar essabt lel 12:30. Ken t7eb nethabetlek el agence bel de9a."}
+{"intent":"appointment_booking","opticien":"nheb rendez-vous fi Tunis ghedwa 10:00, tel 20111222","agent":"Najem nhadhrelk draft rendez-vous fi Tunis ghedwa 10:00 bel numero 20111222, ama يلزم confirmation نهائية قبل التثبيت."}

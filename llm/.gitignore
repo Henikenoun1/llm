@@ -10,7 +10,14 @@ artifacts/cache/
 artifacts/exports/
 artifacts/model/
 artifacts/checkpoints/
+artifacts/adapters/
 artifacts/adapters/*/adapter_model.safetensors
+artifacts/adapters/active_production.json
 *.pt
 *.safetensors
-reports/run.log
+reports/*
+data/history/*
+data/processed/self_sup_*.jsonl
+data/processed/sft_*.jsonl
+data/processed/dpo_*.jsonl
+audit_projet_complet.html

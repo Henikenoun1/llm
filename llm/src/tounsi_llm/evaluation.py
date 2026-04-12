@@ -16,10 +16,12 @@ from rouge_score import rouge_scorer
 from .config import EVAL_DIR, PROCESSED_DATA_DIR, REPORTS_DIR, logger
 from .corrections import LiveCorrectionStore
 from .data_prep import FUSHA_MARKERS, _load_jsonl, is_clean_tounsi
+from .domain_utils import canonicalize_intent, canonicalize_slots, normalize_messages
 from .inference import production_infer
 from .memory import ConversationMemoryStore
 from .rag import VectorRAGRetriever
 from .tools import get_tool_registry
+from .validation import validate_domain_assets
 
 try:  # pragma: no cover - optional dependency
     import sacrebleu
@@ -60,14 +62,77 @@ DEFAULT_EVAL_CASES = [
     {
         "id": "order_missing_phone",
         "input": "نحب نعمل كوموند progressive 1.67 في تونس",
-        "expected_intent": "order_creation",
+        "expected_intent": "create_order",
         "expected_slots": {"product": "progressive", "index": "1.67", "city": "Tunis"},
         "expected_tool": "create_order",
-        "expected_missing_slots": ["phone"],
+        "expected_missing_slots": ["num_client"],
         "expected_human_review": True,
-        "reference_responses": ["يلزمني رقم التليفون باش نكمل الطلبية."],
+        "reference_responses": ["يلزمني num client باش نكمل الطلبية."],
     },
 ]
+
+
+def _tool_precision_recall_f1(rows: list[dict[str, Any]]) -> dict[str, float]:
+    expected = sum(1 for row in rows if row.get("tool_expected"))
+    predicted = sum(1 for row in rows if row.get("tool_detected"))
+    true_positive = sum(
+        1
+        for row in rows
+        if row.get("tool_expected")
+        and row.get("tool_detected")
+        and row.get("tool_expected") == row.get("tool_detected")
+    )
+
+    precision = true_positive / max(predicted, 1)
+    recall = true_positive / max(expected, 1)
+    f1 = 0.0 if precision + recall == 0 else (2 * precision * recall) / (precision + recall)
+    return {
+        "tool_precision": round(precision, 4),
+        "tool_recall": round(recall, 4),
+        "tool_f1": round(f1, 4),
+    }
+
+
+def _intent_breakdown(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    summary: dict[str, Any] = {}
+    for row in rows:
+        expected_intent = str(row.get("intent_expected") or "unknown")
+        bucket = summary.setdefault(
+            expected_intent,
+            {
+                "cases": 0,
+                "intent_accuracy": 0.0,
+                "slot_f1": 0.0,
+                "tool_accuracy": 0.0,
+                "human_review_accuracy": 0.0,
+            },
+        )
+        bucket["cases"] += 1
+        bucket["intent_accuracy"] += 1.0 if row.get("intent_correct") else 0.0
+        bucket["slot_f1"] += float(row.get("slot_f1", 0.0))
+        bucket["tool_accuracy"] += 1.0 if row.get("tool_correct") else 0.0
+        bucket["human_review_accuracy"] += 1.0 if row.get("human_review_correct") else 0.0
+
+    for bucket in summary.values():
+        cases = max(int(bucket["cases"]), 1)
+        bucket["intent_accuracy"] = round(bucket["intent_accuracy"] / cases * 100, 2)
+        bucket["slot_f1"] = round(bucket["slot_f1"] / cases, 4)
+        bucket["tool_accuracy"] = round(bucket["tool_accuracy"] / cases * 100, 2)
+        bucket["human_review_accuracy"] = round(bucket["human_review_accuracy"] / cases * 100, 2)
+    return dict(sorted(summary.items()))
+
+
+def _intent_confusion(rows: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    matrix: dict[str, dict[str, int]] = {}
+    for row in rows:
+        expected_intent = str(row.get("intent_expected") or "unknown")
+        detected_intent = str(row.get("intent_detected") or "unknown")
+        matrix.setdefault(expected_intent, {})
+        matrix[expected_intent][detected_intent] = matrix[expected_intent].get(detected_intent, 0) + 1
+    return {
+        expected: dict(sorted(predicted.items()))
+        for expected, predicted in sorted(matrix.items(), key=lambda item: item[0])
+    }
 
 
 def _safe_mean(values: list[float]) -> float:
@@ -77,7 +142,7 @@ def _safe_mean(values: list[float]) -> float:
 def _flatten_messages(messages: list[dict[str, Any]]) -> tuple[str, str]:
     user_parts = []
     assistant_parts = []
-    for message in messages:
+    for message in normalize_messages(messages):
         role = message.get("role")
         content = str(message.get("content", ""))
         if role == "user":
@@ -193,8 +258,10 @@ def _load_eval_cases(cases_path: Path | None = None) -> list[dict[str, Any]]:
 
 
 def _slot_metrics(expected: dict[str, Any], predicted: dict[str, Any]) -> dict[str, float]:
-    expected_items = {key: str(value) for key, value in expected.items()}
-    predicted_items = {key: str(value) for key, value in predicted.items() if value not in (None, "", [])}
+    expected_items = {key: str(value) for key, value in canonicalize_slots(expected).items()}
+    predicted_items = {
+        key: str(value) for key, value in canonicalize_slots(predicted).items() if value not in (None, "", [])
+    }
     true_positive = sum(1 for key, value in predicted_items.items() if expected_items.get(key) == value)
     precision = true_positive / max(len(predicted_items), 1)
     recall = true_positive / max(len(expected_items), 1)
@@ -280,13 +347,14 @@ def evaluate_inference(
 
         latency = round((time.perf_counter() - started) * 1000, 2)
         response = str(output.get("response", ""))
-        predicted_intent = str(output.get("intent", ""))
-        predicted_slots = output.get("slots", {}) if isinstance(output.get("slots"), dict) else {}
+        predicted_intent = canonicalize_intent(output.get("intent", ""))
+        predicted_slots = canonicalize_slots(output.get("slots", {})) if isinstance(output.get("slots"), dict) else {}
         predicted_tool = None
         if isinstance(output.get("tool_call"), dict):
             predicted_tool = output["tool_call"].get("name")
 
-        expected_slots = case.get("expected_slots", {}) if isinstance(case.get("expected_slots"), dict) else {}
+        expected_intent = canonicalize_intent(case.get("expected_intent"))
+        expected_slots = canonicalize_slots(case.get("expected_slots", {})) if isinstance(case.get("expected_slots"), dict) else {}
         slot_scores = _slot_metrics(expected_slots, predicted_slots)
         overlap = _best_text_overlap(response, [str(item) for item in case.get("reference_responses", [])])
         fusha_count = sum(1 for marker in FUSHA_MARKERS if marker in response)
@@ -301,9 +369,9 @@ def evaluate_inference(
             "id": case.get("id", f"case_{index}"),
             "input": case.get("input", ""),
             "response": response,
-            "intent_expected": case.get("expected_intent"),
+            "intent_expected": expected_intent,
             "intent_detected": predicted_intent,
-            "intent_correct": predicted_intent == case.get("expected_intent"),
+            "intent_correct": predicted_intent == expected_intent,
             "tool_expected": case.get("expected_tool"),
             "tool_detected": predicted_tool,
             "tool_correct": (predicted_tool == case.get("expected_tool")) if case.get("expected_tool") else predicted_tool is None,
@@ -312,10 +380,13 @@ def evaluate_inference(
             "slot_precision": slot_scores["precision"],
             "slot_recall": slot_scores["recall"],
             "slot_f1": slot_scores["f1"],
+            "slot_exact_match": expected_slots == predicted_slots,
             "expected_human_review": bool(case.get("expected_human_review", False)),
             "predicted_human_review": bool(output.get("needs_human_review", False)),
             "human_review_correct": bool(output.get("needs_human_review", False)) == bool(case.get("expected_human_review", False)),
             "latency_ms": latency,
+            "response_tokens": _count_tokens(response),
+            "response_chars": len(response),
             "is_tounsi": is_clean_tounsi(response, max_fusha=3),
             "has_chinese": bool(_CHINESE_RE.search(response)),
             "fusha_count": fusha_count,
@@ -329,41 +400,59 @@ def evaluate_inference(
         details.append(detail)
 
     valid = [row for row in metric_rows if "intent_correct" in row]
+    tool_prf = _tool_precision_recall_f1(valid)
     summary = {
         "cases_total": len(cases),
         "cases_scored": len(valid),
         "errors": len(details) - len(valid),
         "intent_accuracy": round(sum(row["intent_correct"] for row in valid) / max(len(valid), 1) * 100, 2),
         "tool_accuracy": round(sum(row["tool_correct"] for row in valid) / max(len(valid), 1) * 100, 2),
+        **tool_prf,
         "human_review_accuracy": round(sum(row["human_review_correct"] for row in valid) / max(len(valid), 1) * 100, 2),
         "slot_precision": round(sum(row["slot_precision"] for row in valid) / max(len(valid), 1), 4),
         "slot_recall": round(sum(row["slot_recall"] for row in valid) / max(len(valid), 1), 4),
         "slot_f1": round(sum(row["slot_f1"] for row in valid) / max(len(valid), 1), 4),
+        "slot_exact_match_rate": round(sum(row["slot_exact_match"] for row in valid) / max(len(valid), 1) * 100, 2),
         "response_rougeL_f1": round(sum(row["response_metrics"]["rougeL_f1"] for row in valid) / max(len(valid), 1), 4),
         "response_rouge1_f1": round(sum(row["response_metrics"]["rouge1_f1"] for row in valid) / max(len(valid), 1), 4),
         "response_rouge2_f1": round(sum(row["response_metrics"]["rouge2_f1"] for row in valid) / max(len(valid), 1), 4),
         "response_bleu": round(sum(row["response_metrics"]["bleu"] for row in valid) / max(len(valid), 1), 4),
         "response_chrf": round(sum(row["response_metrics"]["chrf"] for row in valid) / max(len(valid), 1), 4),
+        "avg_response_tokens": round(sum(row["response_tokens"] for row in valid) / max(len(valid), 1), 2),
+        "avg_response_chars": round(sum(row["response_chars"] for row in valid) / max(len(valid), 1), 2),
         "tounsi_rate": round(sum(row["is_tounsi"] for row in valid) / max(len(valid), 1) * 100, 2),
         "chinese_rate": round(sum(row["has_chinese"] for row in valid) / max(len(valid), 1) * 100, 2),
         "keyword_pass_rate": round(sum(row["keyword_pass"] for row in valid) / max(len(valid), 1) * 100, 2),
         "forbidden_pass_rate": round(sum(row["forbidden_pass"] for row in valid) / max(len(valid), 1) * 100, 2),
         "avg_fusha_markers": round(sum(row["fusha_count"] for row in valid) / max(len(valid), 1), 2),
         "avg_latency_ms": round(sum(row["latency_ms"] for row in valid) / max(len(valid), 1), 2),
+        "intent_breakdown": _intent_breakdown(valid),
+        "intent_confusion": _intent_confusion(valid),
         "details": details,
     }
     return summary
 
 
 def _markdown_report(report: dict[str, Any]) -> str:
+    validation_summary = report.get("validation_summary", {}).get("summary", {})
     data_summary = report.get("data_summary", {}).get("processed_data", {})
     inference = report.get("inference_summary", {})
     lines = [
         "# Evaluation Report",
         "",
-        "## Data Summary",
+        "## Validation Summary",
         "",
     ]
+    for key, value in validation_summary.items():
+        lines.append(f"- {key}: {value}")
+
+    lines.extend(
+        [
+            "",
+        "## Data Summary",
+        "",
+        ]
+    )
     for split_name, stats in data_summary.items():
         lines.append(f"### {split_name}")
         for key, value in stats.items():
@@ -377,9 +466,19 @@ def _markdown_report(report: dict[str, Any]) -> str:
         ]
     )
     for key, value in inference.items():
-        if key == "details":
+        if key in {"details", "intent_breakdown", "intent_confusion"}:
             continue
         lines.append(f"- {key}: {value}")
+
+    if isinstance(inference.get("intent_breakdown"), dict):
+        lines.extend(["", "### Per-Intent Breakdown", ""])
+        for intent_name, metrics in inference["intent_breakdown"].items():
+            lines.append(f"- {intent_name}: {metrics}")
+
+    if isinstance(inference.get("intent_confusion"), dict):
+        lines.extend(["", "### Intent Confusion", ""])
+        for expected_intent, predicted in inference["intent_confusion"].items():
+            lines.append(f"- {expected_intent}: {predicted}")
 
     lines.extend(
         [
@@ -405,6 +504,7 @@ def run_evaluation(
 ) -> dict[str, Any]:
     report = {
         "generated_at": time.time(),
+        "validation_summary": validate_domain_assets(write_report=True),
         "data_summary": evaluate_processed_data(),
         "inference_summary": evaluate_inference(
             model_variant=model_variant,

@@ -1,116 +1,344 @@
-<div class="shell">
-  <header class="topbar">
-    <div>
-      <h1>{{ health()?.domain?.organization || 'Call Center LLM' }}</h1>
-      <p>{{ health()?.domain?.assistant_name || 'Assistant' }} • {{ health()?.domain?.name || 'Configurable domain' }}</p>
+<div class="workspace-shell">
+  <header class="workspace-header">
+    <div class="brand-block">
+      <div class="brand-mark">SC</div>
+      <div class="brand-copy">
+        <h1>Sanawnaw Care Desk</h1>
+        <p>{{ health()?.domain?.organization || 'Call Center LLM' }} · {{ health()?.domain?.assistant_name || 'Assistant' }}</p>
+      </div>
     </div>
 
-    <div class="topbar-actions">
-      <div class="status" [class.online]="backendOnline()">
-        <span class="dot"></span>
+    <nav class="workspace-nav">
+      <button type="button" [class.active]="activeView() === 'assistant'" (click)="setView('assistant')">Assistant</button>
+      <button type="button" [class.active]="activeView() === 'recommendation'" (click)="setView('recommendation')">Recommandation</button>
+    </nav>
+
+    <div class="header-actions">
+      <div class="runtime-state" [class.online]="backendOnline()">
+        <span class="state-dot"></span>
         <span>{{ backendOnline() ? 'Backend online' : 'Backend offline' }}</span>
       </div>
 
-      <div class="variant-switch">
-        <button type="button" [class.active]="selectedVariant() === 'prod'" (click)="setVariant('prod')">Prod</button>
-        <button type="button" [class.active]="selectedVariant() === 'dpo'" (click)="setVariant('dpo')">DPO</button>
-      </div>
+      @if (activeView() === 'assistant') {
+        <div class="chip-group">
+          <button type="button" [class.active]="selectedVariant() === 'prod'" (click)="setVariant('prod')">Prod</button>
+          <button type="button" [class.active]="selectedVariant() === 'dpo'" (click)="setVariant('dpo')">DPO</button>
+        </div>
 
-      <div class="variant-switch">
-        <button type="button" [class.active]="selectedRuntimeMode() === 'collect_execute'" (click)="setRuntimeMode('collect_execute')">Collect</button>
-        <button type="button" [class.active]="selectedRuntimeMode() === 'speak'" (click)="setRuntimeMode('speak')">Speak</button>
-        <button type="button" [class.active]="selectedRuntimeMode() === 'autonomous'" (click)="setRuntimeMode('autonomous')">Auto</button>
-      </div>
+        <div class="chip-group">
+          <button type="button" [class.active]="selectedRuntimeMode() === 'collect_execute'" (click)="setRuntimeMode('collect_execute')">Collect</button>
+          <button type="button" [class.active]="selectedRuntimeMode() === 'speak'" (click)="setRuntimeMode('speak')">Speak</button>
+          <button type="button" [class.active]="selectedRuntimeMode() === 'autonomous'" (click)="setRuntimeMode('autonomous')">Auto</button>
+        </div>
+      }
 
       <button type="button" class="ghost" (click)="refreshRuntime()">Refresh</button>
       <button type="button" class="ghost" (click)="toggleDebug()">Debug</button>
-      <button type="button" class="ghost" (click)="clearChat()">Reset</button>
+      <button
+        type="button"
+        class="ghost"
+        (click)="activeView() === 'assistant' ? clearChat() : clearRecommendation()"
+      >
+        Reset
+      </button>
     </div>
   </header>
 
-  <main class="content">
-    <section class="chat-panel">
-      @if (messages().length === 0) {
-        <div class="welcome">
-          <h2>Pipeline prod configurable</h2>
-          <p>
-            Cette interface envoie les messages vers la variante
-            <strong>{{ selectedVariant() }}</strong> en mode
-            <strong>{{ selectedRuntimeMode() }}</strong>.
-          </p>
-          <div class="suggestions">
-            @for (suggestion of suggestions; track suggestion) {
-              <button type="button" (click)="send(suggestion)">{{ suggestion }}</button>
+  <main class="workspace-body">
+    <section class="conversation-pane">
+      @if (activeView() === 'assistant') {
+        <div class="pane-head">
+          <h2>Assistant Conversationnel</h2>
+          <p>Mode {{ selectedRuntimeMode() }} · Variante {{ selectedVariant() }}</p>
+        </div>
+
+        @if (messages().length === 0) {
+          <div class="empty-state">
+            <h3>Démarrez une conversation métier</h3>
+            <p>Le chatbot utilise RAG + outils métier avec un style tunisien professionnel.</p>
+            <div class="suggestion-grid">
+              @for (suggestion of suggestions; track suggestion) {
+                <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+              }
+            </div>
+          </div>
+        }
+
+        @if (messages().length > 0) {
+          <div class="messages" #chatContainer>
+            @for (message of messages(); track message.timestamp) {
+              <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
+                <button type="button" class="bubble" (click)="selectMessage(message)">
+                  <div class="message-text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
+                  @if (message.meta) {
+                    <div class="meta-row">
+                      <span>{{ message.meta.intent }}</span>
+                      <span>{{ message.meta.modelVariant }}</span>
+                      <span>{{ message.meta.runtimeMode }}</span>
+                      @if (message.meta.needsHumanReview) {
+                        <span>review</span>
+                      }
+                      @if (message.meta.correctionApplied) {
+                        <span>admin-fix</span>
+                      }
+                      <span>{{ message.meta.latencyMs }} ms</span>
+                    </div>
+                  }
+                </button>
+              </article>
+            }
+
+            @if (isLoading()) {
+              <article class="message assistant">
+                <div class="bubble loading">Le modele prepare une reponse...</div>
+              </article>
             }
           </div>
+        }
+
+        <div class="composer">
+          <textarea
+            [(ngModel)]="inputText"
+            [disabled]="isLoading()"
+            (keydown)="onKeyDown($event)"
+            placeholder="Posez votre question métier..."
+            rows="2"
+          ></textarea>
+          <button type="button" class="send" (click)="send()" [disabled]="isLoading() || !inputText.trim()">Envoyer</button>
         </div>
       }
 
-      @if (messages().length > 0) {
-        <div class="messages" #chatContainer>
-          @for (message of messages(); track message.timestamp) {
-            <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
-              <button type="button" class="bubble" (click)="selectMessage(message)">
-                <div class="text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
-                @if (message.meta) {
-                  <div class="meta">
-                    <span>{{ message.meta.intent }}</span>
-                    <span>{{ message.meta.modelVariant }}</span>
-                    <span>{{ message.meta.runtimeMode }}</span>
-                    @if (message.meta.needsHumanReview) {
-                      <span>review</span>
-                    }
-                    @if (message.meta.correctionApplied) {
-                      <span>admin-fix</span>
-                    }
-                    <span>{{ message.meta.latencyMs }} ms</span>
-                  </div>
-                }
-              </button>
-            </article>
-          }
+      @if (activeView() === 'recommendation') {
+        <div class="pane-head">
+          <h2>Assistant Recommandation Verres</h2>
+          <p>Endpoint spécialisé basé sur le guide officiel Scenario Reco</p>
+        </div>
 
-          @if (isLoading()) {
-            <article class="message assistant">
-              <div class="bubble loading">Le modele prepare une reponse...</div>
-            </article>
-          }
+        @if (recommendationMessages().length === 0) {
+          <div class="empty-state">
+            <h3>Conseil optique guidé</h3>
+            <p>Le moteur combine règles officielles + retrieval RAG pour produire une recommandation traçable.</p>
+            <div class="suggestion-grid">
+              @for (suggestion of recommendationSuggestions; track suggestion) {
+                <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+              }
+            </div>
+          </div>
+        }
+
+        @if (recommendationMessages().length > 0) {
+          <div class="messages" #recoContainer>
+            @for (message of recommendationMessages(); track message.timestamp) {
+              <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
+                <button type="button" class="bubble" (click)="selectMessage(message)">
+                  <div class="message-text">{{ message.text }}</div>
+                  @if (message.meta?.missingFields?.length) {
+                    <div class="meta-row">
+                      <span>missing: {{ message.meta?.missingFields?.length }}</span>
+                    </div>
+                  }
+                </button>
+              </article>
+            }
+
+            @if (recommendationLoading()) {
+              <article class="message assistant">
+                <div class="bubble loading">Analyse du profil et application du guide officiel...</div>
+              </article>
+            }
+          </div>
+        }
+
+        <div class="composer">
+          <textarea
+            [(ngModel)]="recommendationInput"
+            [disabled]="recommendationLoading()"
+            (keydown)="onRecommendationKeyDown($event)"
+            placeholder="Décrivez le cas client (âge, correction, besoin, environnement...)"
+            rows="2"
+          ></textarea>
+          <button
+            type="button"
+            class="send"
+            (click)="sendRecommendation()"
+            [disabled]="recommendationLoading() || !recommendationInput.trim()"
+          >
+            Recommander
+          </button>
         </div>
       }
-
-      <div class="composer">
-        <textarea
-          [(ngModel)]="inputText"
-          [disabled]="isLoading()"
-          (keydown)="onKeyDown($event)"
-          placeholder="Ecrire ici..."
-          rows="2"
-        ></textarea>
-        <button type="button" class="send" (click)="send()" [disabled]="isLoading() || !inputText.trim()">
-          Envoyer
-        </button>
-      </div>
     </section>
 
-    @if (showDebug()) {
-      <aside class="debug-panel">
+    <aside class="insights-pane">
+      <section class="card compact">
+        <h3>Runtime</h3>
+        <p>Status: <strong>{{ backendOnline() ? 'Online' : 'Offline' }}</strong></p>
+        <p>RAG chunks: <strong>{{ health()?.rag?.chunks ?? 0 }}</strong></p>
+        <p>Embedding: <strong>{{ health()?.rag?.embedding_backend || 'N/A' }}</strong></p>
+      </section>
+
+      @if (activeView() === 'recommendation') {
         <section class="card">
-          <h3>Runtime</h3>
+          <h3>Profil Client</h3>
+          <div class="form-grid">
+            <label>Age
+              <input type="number" [(ngModel)]="recommendationProfile.age" min="1" max="99" />
+            </label>
+
+            <label>Montage
+              <select [(ngModel)]="recommendationProfile.frame_type">
+                <option value="">--</option>
+                <option value="nylor">Nylor</option>
+                <option value="plastique">Plastique</option>
+                <option value="metallique">Metallique</option>
+                <option value="perce">Perce</option>
+              </select>
+            </label>
+
+            <label>Correction totale
+              <input type="number" step="0.01" [(ngModel)]="recommendationProfile.correction_total" />
+            </label>
+
+            <label>ADD
+              <input type="number" step="0.01" [(ngModel)]="recommendationProfile.add_power" />
+            </label>
+
+            <label>Diff OD/OG
+              <input type="number" step="0.01" [(ngModel)]="recommendationProfile.od_og_diff" />
+            </label>
+
+            <label>Besoin principal
+              <select [(ngModel)]="recommendationProfile.main_need">
+                <option value="">--</option>
+                <option value="transparence">Transparence</option>
+                <option value="lumiere_bleue">Lumiere bleue</option>
+                <option value="conduite_soir">Conduite soir</option>
+                <option value="rayures">Rayures</option>
+                <option value="nettoyage">Nettoyage</option>
+              </select>
+            </label>
+
+            <label>Sante oculaire
+              <input type="text" [(ngModel)]="recommendationProfile.ocular_health" placeholder="RAS, glaucome..." />
+            </label>
+
+            <label>Environnement
+              <select [(ngModel)]="recommendationProfile.work_env">
+                <option value="">--</option>
+                <option value="interieur">Interieur</option>
+                <option value="exterieur">Exterieur</option>
+                <option value="mixte">Mixte</option>
+              </select>
+            </label>
+
+            <label>Gene lumiere
+              <select [(ngModel)]="recommendationProfile.light_discomfort">
+                <option value="">--</option>
+                <option value="faible">Faible</option>
+                <option value="moyenne">Moyenne</option>
+                <option value="forte">Forte</option>
+              </select>
+            </label>
+
+            <label>Paire soleil
+              <select [(ngModel)]="recommendationProfile.wants_sun_pair">
+                <option [ngValue]="undefined">--</option>
+                <option [ngValue]="true">Oui</option>
+                <option [ngValue]="false">Non</option>
+              </select>
+            </label>
+
+            <label>Reflets genants
+              <select [(ngModel)]="recommendationProfile.glare_exposure">
+                <option [ngValue]="undefined">--</option>
+                <option [ngValue]="true">Oui</option>
+                <option [ngValue]="false">Non</option>
+              </select>
+            </label>
+
+            <label>Difficulte plein soleil
+              <select [(ngModel)]="recommendationProfile.sun_vision_difficulty">
+                <option [ngValue]="undefined">--</option>
+                <option [ngValue]="true">Oui</option>
+                <option [ngValue]="false">Non</option>
+              </select>
+            </label>
+
+            <label>Tete/Yeux
+              <select [(ngModel)]="recommendationProfile.head_eye_behavior">
+                <option value="">--</option>
+                <option value="head">Tete</option>
+                <option value="eyes">Yeux</option>
+                <option value="mixed">Mixte</option>
+              </select>
+            </label>
+
+            <label>Innovation
+              <select [(ngModel)]="recommendationProfile.innovation_sensitive">
+                <option [ngValue]="undefined">--</option>
+                <option [ngValue]="true">Oui</option>
+                <option [ngValue]="false">Non</option>
+              </select>
+            </label>
+
+            <label>Conduite nuit
+              <select [(ngModel)]="recommendationProfile.night_driving">
+                <option [ngValue]="undefined">--</option>
+                <option [ngValue]="true">Oui</option>
+                <option [ngValue]="false">Non</option>
+              </select>
+            </label>
+
+            <label>Usage ordinateur
+              <select [(ngModel)]="recommendationProfile.computer_usage">
+                <option value="">--</option>
+                <option value="high">Tres frequent</option>
+                <option value="medium">Parfois</option>
+                <option value="low">Rarement</option>
+              </select>
+            </label>
+          </div>
+        </section>
+
+        <section class="card highlight" [class.ready]="recommendationReady()">
+          <h3>Resultat Recommandation</h3>
+          @if (recommendationState()?.recommendation) {
+            <ul>
+              <li>Type: <strong>{{ recommendationState()?.recommendation?.lens_type }}</strong></li>
+              <li>Indice: <strong>{{ recommendationState()?.recommendation?.index }}</strong></li>
+              <li>Traitement: <strong>{{ recommendationState()?.recommendation?.treatment }}</strong></li>
+              <li>Couleur: <strong>{{ recommendationState()?.recommendation?.color }}</strong></li>
+              <li>Confiance: <strong>{{ recommendationState()?.recommendation?.confidence }}</strong></li>
+            </ul>
+            <h4>Questions restantes</h4>
+            <ul>
+              @for (q of recommendationState()?.next_questions ?? []; track q) {
+                <li>{{ q }}</li>
+              }
+            </ul>
+          } @else {
+            <p>Complétez le profil et discutez avec l'assistant recommandation pour obtenir un résultat final.</p>
+          }
+        </section>
+      }
+
+      @if (activeView() === 'assistant' && selectedMessage()?.meta) {
+        <section class="card">
+          <h3>Message Meta</h3>
+          <pre>{{ formatJson(selectedMessage()?.meta) }}</pre>
+        </section>
+      }
+
+      @if (showDebug()) {
+        <section class="card">
+          <h3>Debug Runtime</h3>
           <pre>{{ formatJson(health()) }}</pre>
         </section>
-
         <section class="card">
-          <h3>Models</h3>
+          <h3>Debug Models</h3>
           <pre>{{ formatJson(models()) }}</pre>
         </section>
-
-        @if (selectedMessage()?.meta) {
-          <section class="card">
-            <h3>Message Meta</h3>
-            <pre>{{ formatJson(selectedMessage()?.meta) }}</pre>
-          </section>
-        }
-      </aside>
-    }
+      }
+    </aside>
   </main>
 </div>
