@@ -1,0 +1,7 @@
+{
+  "source": "outputs/4_orpo",
+  "source_variant": "orpo",
+  "base_model": "Qwen/Qwen2.5-7B-Instruct",
+  "destination": "artifacts/adapters/production",
+  "adapter_present": true
+}

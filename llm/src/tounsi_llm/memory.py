@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from .config import CFG, DOMAIN_CFG, HISTORY_DIR, resolve_project_path, logger
-from .domain_utils import canonicalize_intent, canonicalize_slots
+from .domain_utils import canonicalize_intent, canonicalize_slots, is_sticky_intent
 from .storage import get_database_backend
 
 
@@ -71,6 +71,18 @@ def _merge_slots(base: dict[str, Any] | None, updates: dict[str, Any] | None) ->
         if value not in (None, "", []):
             merged[key] = value
     return merged
+
+
+def _should_reset_task_state(previous_intent: Any, next_intent: Any) -> bool:
+    previous = canonicalize_intent(previous_intent)
+    current = canonicalize_intent(next_intent)
+    return bool(
+        previous
+        and current
+        and previous != current
+        and is_sticky_intent(previous)
+        and is_sticky_intent(current)
+    )
 
 
 def _session_template() -> dict[str, Any]:
@@ -225,6 +237,7 @@ class ConversationMemoryStore:
         review_required: bool = False,
         tool_call: dict[str, Any] | None = None,
         tool_result: dict[str, Any] | None = None,
+        clear_task_state: bool = False,
     ) -> dict[str, Any]:
         session = self._touch_session(session_id)
         state = session["state"]
@@ -234,11 +247,30 @@ class ConversationMemoryStore:
         tool_status = str((tool_result or {}).get("status", "")).lower() if isinstance(tool_result, dict) else ""
         draft_statuses = {"draft", "collecting", "needs_confirmation", "pending_confirmation"}
         completed_statuses = {"ok", "created", "confirmed", "completed"}
+        previous_active_intent = canonicalize_intent(state.get("active_intent"))
+        reset_task_state = _should_reset_task_state(previous_active_intent, intent)
 
         state["current_intent"] = intent
-        if intent not in {"unknown", "greeting", "thanks"}:
+        if clear_task_state:
+            state["active_intent"] = None
+            state["slots"] = dict(slots)
+            state["missing_slots"] = []
+            state["last_tool_call"] = None
+            state["last_tool_result"] = None
+            state["customer_context"] = {}
+        elif reset_task_state:
+            state["slots"] = dict(slots)
+            state["missing_slots"] = []
+            state["last_tool_call"] = None
+            state["last_tool_result"] = None
+            state["customer_context"] = {}
+        else:
+            state["slots"] = _merge_slots(state.get("slots", {}), slots)
+
+        if clear_task_state and is_sticky_intent(intent):
             state["active_intent"] = intent
-        state["slots"] = _merge_slots(state.get("slots", {}), slots)
+        elif is_sticky_intent(intent):
+            state["active_intent"] = intent
         state["missing_slots"] = list(dict.fromkeys(normalized_missing))
         state["review_required"] = review_required
         state["open_form"] = bool(state["missing_slots"]) or review_required or tool_status in draft_statuses
@@ -373,7 +405,7 @@ class ConversationMemoryStore:
         self.db.record_feedback(feedback_record)
 
         state["current_intent"] = final_intent
-        if final_intent not in {"unknown", "greeting", "thanks"}:
+        if is_sticky_intent(final_intent):
             state["active_intent"] = final_intent
         state["slots"] = final_slots
         if corrected_tool_call is not None:

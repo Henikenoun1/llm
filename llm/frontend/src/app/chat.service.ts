@@ -18,6 +18,9 @@ export interface ChatResponse {
   session_id: string;
   model_variant: string;
   runtime_mode: string;
+  response_source: string;
+  response_script_target: string;
+  response_script_detected: string;
   correction_applied: boolean;
   routing_reason: string;
 }
@@ -52,6 +55,12 @@ export interface HealthResponse {
 export interface ModelsResponse {
   active_variants: Record<string, string | null>;
   default_variant: string;
+}
+
+export interface ToolDescriptor {
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
 }
 
 export interface RecommendationProfile {
@@ -119,7 +128,7 @@ export class ChatService {
 
     const host = window.location.hostname;
     if (host.includes('devtunnels.ms')) {
-      return `https://${host.replace('-4200', '-8000')}`;
+      return '/api';
     }
 
     if (host === 'localhost' || host === '127.0.0.1') {
@@ -138,6 +147,10 @@ export class ChatService {
 
   createEphemeralSessionId(): string {
     return this.createSessionId('reco');
+  }
+
+  getSessionId(): string {
+    return this.sessionId;
   }
 
   sendMessage(message: string, modelVariant: string, runtimeMode: string): Observable<ChatResponse> {
@@ -184,7 +197,7 @@ export class ChatService {
     return this.http.get<ModelsResponse>(`${this.api}/models`);
   }
 
-  getTools(): Observable<{ tools: unknown[] }> {
-    return this.http.get<{ tools: unknown[] }>(`${this.api}/tools`);
+  getTools(): Observable<{ tools: ToolDescriptor[] }> {
+    return this.http.get<{ tools: ToolDescriptor[] }>(`${this.api}/tools`);
   }
 }

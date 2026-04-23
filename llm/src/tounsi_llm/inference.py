@@ -21,7 +21,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .corrections import LiveCorrectionStore
-from .config import CFG, CONFIG_DIR, DOMAIN_CFG, FEW_SHOTS_CFG, logger
+from .config import ADAPTERS_DIR, CFG, CONFIG_DIR, DOMAIN_CFG, FEW_SHOTS_CFG, logger
 from .domain_utils import canonicalize_intent, canonicalize_slots, words_to_number
 from .memory import ConversationMemoryStore
 from .rag import VectorRAGRetriever
@@ -37,6 +37,13 @@ _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 CUSTOMER_ID_RE = re.compile(r"\b(?:CLI|CLT|CLIENT|CUST)[-_]?\s*0*(\d{3,6})\b", re.IGNORECASE)
 STANDALONE_CLIENT_NUMBER_RE = re.compile(r"\b\d{3,6}\b")
+GREETING_CLIENT_RE = re.compile(
+    r"\b(?:3?aslema|salem|salam|marhbe|marhba|bonjour|allo|hello|hi|عسلامة|سلام|مرحبا|أهلا|اهلا)\b"
+    r"(?:\s+(?:m3ak|ma3ak|maak|معاك))?"
+    r"(?:\s*[:,\-])?"
+    r"\s+0*(\d{3,6})\b",
+    re.IGNORECASE,
+)
 INDEX_RE = re.compile(r"\b1\.(?:50|56|60|67)\b")
 INDEX_LABEL_RE = re.compile(r"\b(?:index|indice|ind)\s*(1\.(?:50|56|60|67))\b", re.IGNORECASE)
 REFERENCE_RE = re.compile(r"\b\d{2}\s?\d{2}\b")
@@ -52,6 +59,7 @@ SIGNED_NUMBER_RE = re.compile(r"(plus|moins|\+|-)?\s*(\d{1,2}(?:[.,]\d{1,2})?)",
 AXIS_RE = re.compile(r"(?:axe|axis)\s*(\d{1,3})", re.IGNORECASE)
 ADDITION_RE = re.compile(r"(?:addition|add)\s*(plus|moins|\+|-)?\s*(\d{1,2}(?:[.,]\d{1,2})?)", re.IGNORECASE)
 _DOMAIN_VALUE_CACHE: dict[str, list[str]] | None = None
+_DOMAIN_VALUE_NEEDLE_CACHE: dict[str, list[tuple[str, str]]] | None = None
 
 _ARABIZI_STYLE_MARKERS = {
     "aslema",
@@ -71,6 +79,67 @@ _ARABIZI_STYLE_MARKERS = {
     "3lech",
     "ya3tik",
     "3aychek",
+}
+
+_TOPIC_RESET_MARKERS = [
+    "autre sujet",
+    "nouveau sujet",
+    "change de sujet",
+    "question okhra",
+    "sujet e5er",
+    "sujet akher",
+    "haja o5ra",
+    "haja اخرى",
+    "حاجة اخرى",
+    "موضوع اخر",
+    "موضوع آخر",
+    "بدل الموضوع",
+    "passons a autre chose",
+    "sinon",
+]
+
+_FOLLOW_UP_CLARIFICATION_MARKERS = [
+    "ma3neha",
+    "ya3ni",
+    "fasserli",
+    "faserli",
+    "kifech",
+    "kifach",
+    "expliquer",
+    "explique",
+    "clarifie",
+    "clarifier",
+    "plus",
+    "encore",
+    "زيد",
+    "وضح",
+]
+
+_FOLLOW_UP_CONFIRMATION_MARKERS = [
+    "oui",
+    "non",
+    "ok",
+    "okay",
+    "d accord",
+    "dakord",
+    "ey",
+    "yes",
+    "no",
+    "s7i7",
+    "صح",
+    "confirm",
+    "confirme",
+    "ثبّت",
+]
+
+_INTENT_CONTEXT_ANCHORS = {
+    "create_order": {"num_client", "product", "reference", "lens_code", "material", "index", "color", "diameter"},
+    "order_tracking": {"num_client", "order_id"},
+    "price_inquiry": {"product", "index", "treatment", "city"},
+    "availability_inquiry": {"reference", "lens_code", "product", "index"},
+    "reference_confirmation": {"reference", "lens_code"},
+    "delivery_schedule": {"agence", "secteur", "city", "time_slot"},
+    "appointment_booking": {"city", "date", "time_slot", "phone"},
 }
 
 _MODEL_CACHE: dict[str, tuple[Any, Any]] = {}
@@ -119,7 +188,20 @@ def _norm_for_matching(text: str) -> str:
 
 
 def _detect_script_like(text: str) -> str:
-    normalized = normalize_text(text)
+    raw_text = unicodedata.normalize("NFKC", str(text or ""))
+    if not raw_text.strip():
+        return "other"
+
+    raw_has_arabic = bool(_ARABIC_CHAR_RE.search(raw_text))
+    raw_has_latin = bool(_LATIN_CHAR_RE.search(raw_text))
+    if raw_has_arabic and not raw_has_latin:
+        return "arabic"
+    if raw_has_latin and not raw_has_arabic:
+        return "arabizi"
+    if raw_has_arabic and raw_has_latin:
+        return "mixed"
+
+    normalized = normalize_text(raw_text)
     if not normalized:
         return "other"
     has_arabic = bool(_ARABIC_CHAR_RE.search(normalized))
@@ -133,6 +215,114 @@ def _detect_script_like(text: str) -> str:
     return "other"
 
 
+def _has_text_signal(text: str, phrases: list[str]) -> bool:
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    for phrase in phrases:
+        needle = _norm_for_matching(phrase)
+        if needle and needle in normalized:
+            return True
+    return False
+
+
+def _is_explicit_topic_reset(text: str) -> bool:
+    return _has_text_signal(text, _TOPIC_RESET_MARKERS)
+
+
+def _intent_anchor_slots(intent: str) -> set[str]:
+    intent = canonicalize_intent(intent)
+    anchors = set(DOMAIN_CFG.get("required_slots", {}).get(intent, []))
+    anchors.update(_INTENT_CONTEXT_ANCHORS.get(intent, set()))
+    return anchors
+
+
+def _context_overlap_score(
+    text: str,
+    active_intent: str,
+    known_slots: dict[str, Any],
+    missing_slots: list[str],
+) -> float:
+    text_tokens = {token for token in _norm_for_matching(text).split() if token}
+    if not text_tokens:
+        return 0.0
+
+    context_tokens = {token for token in _norm_for_matching(active_intent.replace("_", " ")).split() if token}
+    for slot_name in missing_slots:
+        context_tokens.update(token for token in _norm_for_matching(str(slot_name).replace("_", " ")).split() if token)
+    for value in known_slots.values():
+        context_tokens.update(token for token in _norm_for_matching(str(value)).split() if token)
+
+    if not context_tokens:
+        return 0.0
+    return len(text_tokens & context_tokens) / max(len(text_tokens), 1)
+
+
+def _looks_like_active_follow_up(
+    text: str,
+    active_intent: str,
+    extracted_slots: dict[str, Any],
+    session_state: dict[str, Any],
+) -> bool:
+    known_slots = session_state.get("slots", {}) if isinstance(session_state.get("slots"), dict) else {}
+    missing_slots = [str(item) for item in session_state.get("missing_slots", []) if item]
+    anchors = _intent_anchor_slots(active_intent)
+
+    if any(extracted_slots.get(slot_name) for slot_name in missing_slots):
+        return True
+    if any(extracted_slots.get(slot_name) for slot_name in anchors):
+        return True
+    if any(slot_name in known_slots for slot_name in extracted_slots):
+        return True
+    if _has_text_signal(text, _FOLLOW_UP_CLARIFICATION_MARKERS):
+        return True
+    if _has_text_signal(text, _FOLLOW_UP_CONFIRMATION_MARKERS):
+        return True
+
+    normalized = _norm_for_matching(text)
+    tokens = normalized.split()
+    if len(tokens) <= 2 and (normalized.isdigit() or extracted_slots):
+        return True
+
+    return _context_overlap_score(text, active_intent, known_slots, missing_slots) >= 0.18
+
+
+def _should_reset_active_context(
+    text: str,
+    resolved_intent: str,
+    extracted_slots: dict[str, Any],
+    session_state: dict[str, Any] | None,
+) -> bool:
+    session_state = session_state or {}
+    active_intent = canonicalize_intent(session_state.get("active_intent"))
+    open_form = bool(session_state.get("open_form"))
+    known_slots = session_state.get("slots", {}) if isinstance(session_state.get("slots"), dict) else {}
+    normalized = _norm_for_matching(text)
+    token_count = len(normalized.split())
+
+    if not active_intent or not open_form:
+        return False
+    if _is_explicit_topic_reset(text):
+        return True
+    if resolved_intent not in {"unknown", "get_num_client", active_intent}:
+        return True
+
+    anchors = _intent_anchor_slots(active_intent)
+    conflicting_anchor = any(
+        extracted_slots.get(slot_name)
+        and known_slots.get(slot_name)
+        and extracted_slots[slot_name] != known_slots[slot_name]
+        for slot_name in anchors
+    )
+    if conflicting_anchor:
+        return True
+    if _looks_like_active_follow_up(text, active_intent, extracted_slots, session_state):
+        return False
+    if token_count >= 3 and not extracted_slots and _context_overlap_score(text, active_intent, known_slots, []) < 0.12:
+        return True
+    return False
+
+
 def _preferred_response_script(user_text: str) -> str:
     detected = _detect_script_like(user_text)
     if detected in {"arabizi", "latin"}:
@@ -140,12 +330,7 @@ def _preferred_response_script(user_text: str) -> str:
     if detected == "arabic":
         return "arabic"
     if detected == "mixed":
-        lowered = normalize_text(user_text).lower()
-        if any(marker in lowered for marker in _ARABIZI_STYLE_MARKERS):
-            return "arabizi"
-        arabic_count = len(_ARABIC_CHAR_RE.findall(lowered))
-        latin_count = len(_LATIN_CHAR_RE.findall(lowered))
-        return "arabizi" if latin_count >= arabic_count else "arabic"
+        return "mixed"
     return "arabic"
 
 
@@ -154,6 +339,11 @@ def _script_instruction(target_script: str) -> str:
         return (
             "Reply in Tunisian Arabizi (Latin script) with a professional call-center tone. "
             "Keep the answer concise and do not switch to MSA Arabic unless the user asked for it."
+        )
+    if target_script == "mixed":
+        return (
+            "جاوب بدارجة تونسية code-switch طبيعية: عربي تونسي مع termes metier بالفرنسية كيما يحكي agent call center. "
+            "خلي الجواب مختصر وواضح وما تبدلش لأسلوب رسمي برشا."
         )
     return (
         "جاوب باللهجة التونسية بالحروف العربية وبأسلوب مهني متاع مركز نداء. "
@@ -226,6 +416,8 @@ def _is_script_mismatch(text: str, target_script: str) -> bool:
     has_latin = bool(_LATIN_CHAR_RE.search(normalized))
     if target_script == "arabizi":
         return has_arabic and not has_latin
+    if target_script == "mixed":
+        return not (has_arabic and has_latin)
     return has_latin and not has_arabic
 
 
@@ -234,7 +426,11 @@ def _build_script_retry_messages(messages: list[dict[str, str]], target_script: 
     retry_instruction = (
         "Your previous answer script does not match the user style. Regenerate strictly in Tunisian Arabizi (Latin letters)."
         if target_script == "arabizi"
-        else "المسودة السابقة ما تحترمش سكريبت المستخدم. أعد الجواب باللهجة التونسية بالحروف العربية فقط."
+        else (
+            "المسودة السابقة ما احترمتش style متاع المستخدم. أعد الجواب بدارجة تونسية code-switch طبيعية."
+            if target_script == "mixed"
+            else "المسودة السابقة ما تحترمش سكريبت المستخدم. أعد الجواب باللهجة التونسية بالحروف العربية فقط."
+        )
     )
     retry_messages.insert(1, {"role": "system", "content": retry_instruction})
     return retry_messages
@@ -242,6 +438,7 @@ def _build_script_retry_messages(messages: list[dict[str, str]], target_script: 
 
 def _load_domain_value_lexicon() -> dict[str, list[str]]:
     global _DOMAIN_VALUE_CACHE
+    global _DOMAIN_VALUE_NEEDLE_CACHE
     if _DOMAIN_VALUE_CACHE is not None:
         return _DOMAIN_VALUE_CACHE
 
@@ -299,6 +496,10 @@ def _load_domain_value_lexicon() -> dict[str, list[str]]:
     _DOMAIN_VALUE_CACHE = {
         field: sorted((value for value in items if value), key=lambda item: len(_norm_for_matching(item)), reverse=True)
         for field, items in values.items()
+    }
+    _DOMAIN_VALUE_NEEDLE_CACHE = {
+        field: [(value, f" {_norm_for_matching(value)} ") for value in items if _norm_for_matching(value)]
+        for field, items in _DOMAIN_VALUE_CACHE.items()
     }
     return _DOMAIN_VALUE_CACHE
 
@@ -359,16 +560,16 @@ def _extract_rag_delivery_slots(text: str) -> dict[str, Any]:
 
 
 def _extract_lexicon_value(text: str, field: str) -> str | None:
+    global _DOMAIN_VALUE_NEEDLE_CACHE
     lowered = _norm_for_matching(text)
-    for candidate in _load_domain_value_lexicon().get(field, []):
-        normalized_candidate = _norm_for_matching(candidate)
-        if not normalized_candidate:
-            continue
-        candidate_tokens = [re.escape(token) for token in normalized_candidate.split() if token]
-        if not candidate_tokens:
-            continue
-        pattern = r"\\b" + r"\\s+".join(candidate_tokens) + r"\\b"
-        if re.search(pattern, lowered):
+    if not lowered:
+        return None
+
+    _load_domain_value_lexicon()
+    needle_cache = _DOMAIN_VALUE_NEEDLE_CACHE or {}
+    padded = f" {lowered} "
+    for candidate, needle in needle_cache.get(field, []):
+        if needle in padded:
             return candidate
     return None
 
@@ -387,9 +588,27 @@ def _normalize_signed_value(sign: str | None, raw_number: str) -> str:
 def _extract_num_client(text: str) -> str | None:
     if match := CUSTOMER_ID_RE.search(text):
         return str(int(match.group(1)))
+    if match := GREETING_CLIENT_RE.search(text):
+        return str(int(match.group(1)))
 
     normalized = _norm_for_matching(text)
-    if any(marker in normalized for marker in ["num client", "معاك", "client", "cli"]):
+    if any(
+        marker in normalized
+        for marker in [
+            "num client",
+            "معاك",
+            "maak",
+            "ma3ak",
+            "m3ak",
+            "client",
+            "cli",
+            "عسلامة",
+            "aslema",
+            "3aslema",
+            "salem",
+            "salam",
+        ]
+    ):
         spoken = words_to_number(normalized)
         if spoken is not None and 100 <= spoken <= 999999:
             return str(spoken)
@@ -620,7 +839,8 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         for keyword in [*create_keywords, *order_creation_keywords]
         if _norm_for_matching(keyword) not in {"illico"}
     ]
-    create_signal = has_product_signal or has_keyword(strong_create_keywords)
+    strong_create_signal = has_keyword(strong_create_keywords)
+    create_signal = has_product_signal or strong_create_signal
     tracking_keywords = [
         keyword
         for keyword in intent_keywords.get("order_tracking", [])
@@ -633,7 +853,10 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         token in normalized for token in ["وين", "وصلت", "وقتاش", "تجي", "حالة", "statut", "livraison", "suivi"]
     )
     tracking_signal = has_order or has_keyword(tracking_keywords) or (tracking_question_signal and business_opening)
-    price_signal = has_keyword(intent_keywords.get("price_inquiry", []))
+    price_signal = has_keyword(intent_keywords.get("price_inquiry", [])) or any(
+        token in normalized
+        for token in ["9adech", "qadech", "gadech", "soum", "soum", "essoum", "thamen", "thman"]
+    )
 
     if not has_num_client and business_opening and not create_signal and not tracking_signal and not availability_signal and not reference_signal and not schedule_signal:
         return "get_num_client"
@@ -643,14 +866,16 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
     ):
         return "get_num_client"
 
-    if availability_signal and not create_signal:
-        return "availability_inquiry"
     if schedule_signal and not create_signal and not has_order:
         return "delivery_schedule"
+    if availability_signal and not create_signal:
+        return "availability_inquiry"
     if reference_signal and not create_signal:
         return "reference_confirmation"
     if tracking_signal:
         return "order_tracking"
+    if price_signal and not tracking_signal and not strong_create_signal:
+        return "price_inquiry"
     if create_signal:
         return "create_order"
     if price_signal:
@@ -713,13 +938,18 @@ def extract_slots(text: str) -> dict[str, Any]:
     for slot_name, pattern in DOMAIN_CFG.get("slot_patterns", {}).items():
         if slot_name in slots:
             continue
+        if slot_name == "customer_id" and slots.get("num_client"):
+            continue
         try:
             compiled = re.compile(str(pattern), re.IGNORECASE)
         except re.error:
             logger.warning("Invalid slot pattern for %s: %s", slot_name, pattern)
             continue
         if match := compiled.search(text):
-            slots[slot_name] = match.group(1) if match.groups() else match.group(0)
+            candidate = match.group(1) if match.groups() else match.group(0)
+            if slot_name == "customer_id" and not any(char.isdigit() for char in str(candidate)):
+                continue
+            slots[slot_name] = candidate
 
     city = _extract_alias(text, DOMAIN_CFG.get("location_aliases", {}))
     if city:
@@ -770,14 +1000,18 @@ def _resolve_turn_state(
     intent: str,
     extracted_slots: dict[str, Any],
     session_state: dict[str, Any] | None,
-) -> tuple[str, dict[str, Any]]:
+) -> tuple[str, dict[str, Any], bool]:
     session_state = session_state or {}
     active_intent = canonicalize_intent(session_state.get("active_intent"))
     open_form = bool(session_state.get("open_form"))
     known_slots = session_state.get("slots", {}) if isinstance(session_state.get("slots"), dict) else {}
 
     resolved_intent = canonicalize_intent(intent)
+    extracted_slots = canonicalize_slots(extracted_slots)
+    clear_task_state = _should_reset_active_context(text, resolved_intent, extracted_slots, session_state)
     carried_slots: dict[str, Any] = {}
+    if clear_task_state:
+        return resolved_intent, extracted_slots, True
     if active_intent and open_form and resolved_intent in {"unknown", "get_num_client", active_intent}:
         resolved_intent = active_intent
         carried_slots = known_slots
@@ -787,7 +1021,7 @@ def _resolve_turn_state(
         resolved_intent = active_intent
         carried_slots = known_slots
 
-    return resolved_intent, _merge_slots(carried_slots, extracted_slots)
+    return resolved_intent, _merge_slots(carried_slots, extracted_slots), False
 
 
 def _summarize_session_state(session_state: dict[str, Any] | None) -> dict[str, Any]:
@@ -890,6 +1124,560 @@ def _mode_instruction(runtime_mode: str) -> str:
     )
 
 
+_SLOT_LABELS_AR = {
+    "num_client": "num client",
+    "order_id": "bon de commande",
+    "product": "produit",
+    "reference": "reference",
+    "index": "indice",
+    "material": "matiere",
+    "treatment": "traitement",
+    "color": "couleur",
+    "diameter": "diametre",
+    "quantity": "quantite",
+    "city": "ville",
+    "agence": "agence",
+    "secteur": "secteur",
+    "date": "date",
+    "time_slot": "creneau",
+    "phone": "telephone",
+    "addition": "addition",
+    "priority": "priorite",
+    "material_or_index": "matiere ou indice",
+    "og_values_or_confirmation": "valeurs OG",
+    "od_values_or_confirmation": "valeurs OD",
+}
+
+_SLOT_LABELS_LATIN = {
+    "num_client": "num client",
+    "order_id": "bon de commande",
+    "product": "produit",
+    "reference": "reference",
+    "index": "indice",
+    "material": "matiere",
+    "treatment": "traitement",
+    "color": "couleur",
+    "diameter": "diametre",
+    "quantity": "quantite",
+    "city": "ville",
+    "agence": "agence",
+    "secteur": "secteur",
+    "date": "date",
+    "time_slot": "creneau",
+    "phone": "telephone",
+    "addition": "addition",
+    "priority": "priorite",
+    "material_or_index": "matiere wala indice",
+    "og_values_or_confirmation": "valeurs OG",
+    "od_values_or_confirmation": "valeurs OD",
+}
+
+_STATUS_LABELS_AR = {
+    "VALIDEE": "validee",
+    "EN_FABRICATION": "en fabrication",
+    "LIVREE": "livree",
+    "ANNULEE": "annulee",
+    "BLOQUEE": "bloquee",
+    "PROCESSING": "en traitement",
+    "SHIPPED": "expediee",
+    "DELIVERED": "livree",
+    "PENDING": "en attente",
+}
+
+_STATUS_LABELS_LATIN = {
+    "VALIDEE": "validee",
+    "EN_FABRICATION": "en fabrication",
+    "LIVREE": "livree",
+    "ANNULEE": "annulee",
+    "BLOQUEE": "bloquee",
+    "PROCESSING": "en traitement",
+    "SHIPPED": "expediee",
+    "DELIVERED": "livree",
+    "PENDING": "en attente",
+}
+
+
+def _script_text(target_script: str, *, arabic: str, latin: str) -> str:
+    return latin if target_script == "arabizi" else arabic
+
+
+def _slot_label(slot: str, target_script: str) -> str:
+    labels = _SLOT_LABELS_LATIN if target_script == "arabizi" else _SLOT_LABELS_AR
+    return labels.get(slot, slot.replace("_", " "))
+
+
+def _natural_join(items: list[str], target_script: str) -> str:
+    values = [item.strip() for item in items if item and item.strip()]
+    if not values:
+        return ""
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        joiner = " w " if target_script == "arabizi" else " و "
+        return f"{values[0]}{joiner}{values[1]}"
+    separator = ", "
+    tail_joiner = " w " if target_script == "arabizi" else " و "
+    return f"{separator.join(values[:-1])}{tail_joiner}{values[-1]}"
+
+
+def _format_scalar(value: Any) -> str:
+    if value in (None, "", [], {}):
+        return ""
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value if item not in (None, "", []))
+    return str(value).strip()
+
+
+def _format_slots_recap(slots: dict[str, Any], target_script: str) -> str:
+    items: list[str] = []
+    ordered_keys = [
+        "num_client",
+        "order_id",
+        "product",
+        "reference",
+        "index",
+        "material",
+        "treatment",
+        "color",
+        "diameter",
+        "quantity",
+        "priority",
+        "city",
+        "agence",
+        "secteur",
+        "date",
+        "time_slot",
+        "phone",
+        "addition",
+    ]
+    for key in ordered_keys:
+        value = _format_scalar(slots.get(key))
+        if not value:
+            continue
+        items.append(f"{_slot_label(key, target_script)}: {value}")
+
+    for eye in ["od", "og"]:
+        eye_items = []
+        for suffix, label in [("sphere", "sphere"), ("cyl", "cyl"), ("axis", "axe")]:
+            key = f"{eye}_{suffix}"
+            value = _format_scalar(slots.get(key))
+            if value:
+                eye_items.append(f"{label} {value}")
+        if eye_items:
+            items.append(f"{eye.upper()}: {' / '.join(eye_items)}")
+
+    return _natural_join(items, target_script)
+
+
+def _status_label(status: str | None, target_script: str) -> str:
+    normalized = str(status or "").strip().upper()
+    labels = _STATUS_LABELS_LATIN if target_script == "arabizi" else _STATUS_LABELS_AR
+    return labels.get(normalized, str(status or "").strip() or "en attente")
+
+
+def _first_non_empty(*values: Any) -> str:
+    for value in values:
+        rendered = _format_scalar(value)
+        if rendered:
+            return rendered
+    return ""
+
+
+def _primary_match_from_result(tool_result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(tool_result, dict):
+        return {}
+    best_match = tool_result.get("best_match")
+    if isinstance(best_match, dict) and best_match:
+        return best_match
+    compact_top_level = {
+        "code": tool_result.get("code"),
+        "reference": tool_result.get("reference"),
+        "name": tool_result.get("name"),
+        "material": tool_result.get("material"),
+        "diameter": tool_result.get("diameter"),
+        "brand": tool_result.get("brand"),
+    }
+    if any(_format_scalar(value) for value in compact_top_level.values()):
+        return compact_top_level
+    reference_details = tool_result.get("reference_details")
+    if isinstance(reference_details, dict):
+        best_match = reference_details.get("best_match")
+        if isinstance(best_match, dict) and best_match:
+            return best_match
+        compact = {
+            "code": reference_details.get("reference"),
+            "name": _first_non_empty(reference_details.get("products")),
+            "material": _first_non_empty(reference_details.get("materials")),
+            "diameter": _first_non_empty(reference_details.get("diameters")),
+        }
+        if any(compact.values()):
+            return compact
+    matches = tool_result.get("lens_matches")
+    if isinstance(matches, list) and matches:
+        first = matches[0]
+        if isinstance(first, dict):
+            return first
+    return {}
+
+
+def _primary_rag_match(rag_results: list[dict[str, Any]]) -> dict[str, Any]:
+    for item in rag_results:
+        metadata = item.get("metadata")
+        if isinstance(metadata, dict) and any(
+            metadata.get(key)
+            for key in ["code", "nom", "marque", "matiere", "diametre", "agence", "secteur", "premier_creneau"]
+        ):
+            return metadata
+    return {}
+
+
+def _render_match_summary(match: dict[str, Any], target_script: str) -> str:
+    code = _first_non_empty(match.get("code"), match.get("reference"))
+    name = _first_non_empty(match.get("name"), match.get("nom"))
+    material = _first_non_empty(match.get("material"), match.get("matiere"))
+    diameter = _first_non_empty(match.get("diameter"), match.get("diametre"))
+    brand = _first_non_empty(match.get("brand"), match.get("marque"))
+    material = re.sub(r"\s*\([^)]*\)", "", material).strip()
+    parts = []
+    if code:
+        parts.append(f"code {code}")
+    if name:
+        parts.append(name)
+    if material:
+        parts.append(material)
+    if diameter:
+        parts.append(f"diametre {diameter}")
+    if brand:
+        parts.append(brand)
+    return _natural_join(parts, target_script)
+
+
+def _delivery_phrase(payload: dict[str, Any], target_script: str) -> str:
+    schedule = payload.get("delivery_schedule") if isinstance(payload.get("delivery_schedule"), dict) else {}
+    source_payload = schedule if isinstance(schedule, dict) and schedule else payload
+    agence = _first_non_empty(source_payload.get("agence"))
+    secteur = _first_non_empty(source_payload.get("secteur"))
+    next_slot = _first_non_empty(source_payload.get("next_slot"))
+    eta_days = _first_non_empty(payload.get("eta_days"))
+    parts = []
+    if agence:
+        parts.append(
+            _script_text(
+                target_script,
+                arabic=f"التسليم يكون للـ agence {agence}",
+                latin=f"livraison temchi ll agence {agence}",
+            )
+        )
+    if secteur:
+        parts.append(
+            _script_text(
+                target_script,
+                arabic=f"secteur {secteur}",
+                latin=f"secteur {secteur}",
+            )
+        )
+    if next_slot:
+        parts.append(
+            _script_text(
+                target_script,
+                arabic=f"اقرب creneau تقريبي {next_slot}",
+                latin=f"a9reb creneau ta9ribi {next_slot}",
+            )
+        )
+    elif eta_days:
+        parts.append(
+            _script_text(
+                target_script,
+                arabic=f"delai تقريبي {eta_days} نهارات",
+                latin=f"delai ta9ribi {eta_days} nharat",
+            )
+        )
+    return ". ".join(parts).strip()
+
+
+def _missing_slot_prompt(slot: str, target_script: str) -> str:
+    prompts_ar = {
+        "num_client": "عسلامة، عطيني num client باش نكمل معاك.",
+        "order_id": "مدلي bon de commande ولا order_id باش نتثبت على الطلبية.",
+        "product": "شنوة produit بالضبط اللي تحب عليه الطلبية؟",
+        "reference": "عطيني reference باش نتثبتلك بالضبط.",
+        "index": "يلزمني indice باش نثبتلك الخدمة.",
+        "material": "شنوة matiere اللي تحب عليها؟",
+        "treatment": "شنوة traitement اللي تحب عليه؟",
+        "color": "شنوة couleur المطلوبة؟",
+        "diameter": "يلزمني diametre باش نكمل.",
+        "quantity": "قداش quantité تحب؟",
+        "city": "في أي ville ولا agence تحب الخدمة؟",
+        "agence": "عطيني agence باش نثبت livraison.",
+        "secteur": "شنوة secteur من فضلك؟",
+        "date": "شنوة التاريخ اللي يناسبك؟",
+        "time_slot": "أي creneau تحب؟",
+        "phone": "عطيني numero de telephone باش نثبت rendez-vous.",
+        "addition": "قلي addition من فضلك باش نكمل.",
+        "priority": "الطلبية normale ولا illico؟",
+        "material_or_index": "يلزمني matiere ولا indice باش تكون الطلبية واضحة.",
+        "og_values_or_confirmation": "ثبتلي قيم OG من فضلك، ولا قولي إذا ما فماش OG.",
+        "od_values_or_confirmation": "ثبتلي قيم OD من فضلك، ولا قولي إذا ما فماش OD.",
+    }
+    prompts_latin = {
+        "num_client": "3atini num client bach nkammel m3ak.",
+        "order_id": "Medli bon de commande wala order_id bach nthabet 3al commande.",
+        "product": "Chnoua el produit bedhabt eli t7eb 3lih el commande?",
+        "reference": "3atini reference bach nthabetlek bedhabt.",
+        "index": "Yelzemni indice bach nthabetlek el demande.",
+        "material": "Chnoua el matiere eli t7eb 3liha?",
+        "treatment": "Chnoua el traitement eli t7eb 3lih?",
+        "color": "Chnoua el couleur المطلوبة؟",
+        "diameter": "Yelzemni diametre bach nkammel.",
+        "quantity": "9adech quantite t7eb?",
+        "city": "Fi anhi ville wala agence t7eb el khidma?",
+        "agence": "3atini agence bach nthabet el livraison.",
+        "secteur": "Chnoua el secteur men fadhlik?",
+        "date": "Chnoua et date elli tensbek?",
+        "time_slot": "Anhi creneau t7eb?",
+        "phone": "3atini numero de telephone bach nthabet rendez-vous.",
+        "addition": "9olli addition men fadhlik bach nkammel.",
+        "priority": "El commande normale wala illico?",
+        "material_or_index": "Yelzemni matiere wala indice bach twalli el demande wadha.",
+        "og_values_or_confirmation": "Thabetli valeurs OG men fadhlik, wala 9olli ken ma famech.",
+        "od_values_or_confirmation": "Thabetli valeurs OD men fadhlik, wala 9olli ken ma famech.",
+    }
+    prompts = prompts_latin if target_script == "arabizi" else prompts_ar
+    return prompts.get(slot, _script_text(target_script, arabic=f"يلزمني {_slot_label(slot, target_script)} باش نكمل.", latin=f"Yelzemni {_slot_label(slot, target_script)} bach nkammel."))
+
+
+def _topic_reset_response(target_script: str) -> str:
+    return _script_text(
+        target_script,
+        arabic="مريقل، سكرنا الموضوع اللي قبل. توة قولي شنية الموضوع الجديد اللي تحب عليه.",
+        latin="Mriguel, sakkarna el sujet elli 9bal. Tawa 9olli chnia el mawthou3 ejdid elli t7eb 3lih.",
+    )
+
+
+def _render_controlled_response(
+    *,
+    intent: str,
+    slots: dict[str, Any],
+    missing_slots: list[str],
+    tool_name: str | None,
+    tool_result: dict[str, Any] | None,
+    rag_results: list[dict[str, Any]],
+    auto_execute_tool: bool,
+    runtime_mode: str,
+    target_script: str,
+) -> str | None:
+    intent = canonicalize_intent(intent)
+    slots = canonicalize_slots(slots)
+    tool_status = str((tool_result or {}).get("status", "")).lower() if isinstance(tool_result, dict) else ""
+    recap = _format_slots_recap(tool_result if isinstance(tool_result, dict) else slots, target_script) or _format_slots_recap(slots, target_script)
+
+    if intent == "greeting":
+        return _script_text(
+            target_script,
+            arabic="عسلامة، مرحبا بيك. شنية الخدمة اللي تحب عليها اليوم؟",
+            latin="Aslema, marhbe bik. Chnia el khidma elli t7eb 3liha lyoum?",
+        )
+    if intent == "thanks":
+        return _script_text(
+            target_script,
+            arabic="على الرحب والسعة. إذا تحب نعاونك في حاجة أخرى قولي.",
+            latin="3la rasse w l3in. Ken t7eb n3awnek fi 7aja o5ra, 9olli.",
+        )
+    if intent == "get_num_client":
+        if slots.get("num_client"):
+            num_client = _first_non_empty(slots.get("num_client"))
+            return _script_text(
+                target_script,
+                arabic=f"وصلني num client {num_client}. توة قولي شنية الطلب بالضبط.",
+                latin=f"Woselni num client {num_client}. Tawa 9olli chnia et demande bedhabt.",
+            )
+        return _missing_slot_prompt("num_client", target_script)
+    if missing_slots:
+        return _missing_slot_prompt(missing_slots[0], target_script)
+
+    if intent == "price_inquiry":
+        if tool_status == "ok":
+            price_min = tool_result.get("price_min_dt")
+            price_max = tool_result.get("price_max_dt")
+            product = _first_non_empty(tool_result.get("product"), slots.get("product"))
+            index = _first_non_empty(tool_result.get("index"), slots.get("index"))
+            treatment = _first_non_empty(tool_result.get("treatment"), slots.get("treatment"))
+            return _script_text(
+                target_script,
+                arabic=(
+                    f"السوم التقريبي لـ {product} indice {index} هو بين {price_min} و {price_max} دينار"
+                    + (f" مع {treatment}" if treatment else "")
+                    + ". إذا تحب نثبتلك version أخرى قولي."
+                ),
+                latin=(
+                    f"Essoum ta9ribi mta3 {product} indice {index} bin {price_min} w {price_max} dinar"
+                    + (f" m3a {treatment}" if treatment else "")
+                    + ". Ken t7eb nثبتلك version o5ra 9olli."
+                ),
+            )
+        return _missing_slot_prompt("product", target_script)
+
+    if intent == "store_info":
+        if tool_status == "ok":
+            store_name = _first_non_empty(tool_result.get("store_name"))
+            city = _first_non_empty(tool_result.get("city"), slots.get("city"))
+            weekday = _first_non_empty(tool_result.get("hours_weekday"))
+            saturday = _first_non_empty(tool_result.get("hours_sat"))
+            sunday = _first_non_empty(tool_result.get("hours_sun"))
+            return _script_text(
+                target_script,
+                arabic=f"في {city}، {store_name} يخدم {weekday}. السبت {saturday}، والأحد {sunday}.",
+                latin=f"Fi {city}, {store_name} ykhdem {weekday}. Essebt {saturday}, w la7ad {sunday}.",
+            )
+        return _missing_slot_prompt("city", target_script)
+
+    if intent == "product_info":
+        match = _primary_rag_match(rag_results)
+        match_summary = _render_match_summary(match, target_script)
+        if match_summary:
+            return _script_text(
+                target_script,
+                arabic=f"الproduit الأقرب اللي عندي: {match_summary}. إذا تحب dispo ولا prix، عطيني reference ولا indice.",
+                latin=f"El produit elli 9rib nلقى 3lih: {match_summary}. Ken t7eb dispo wala prix, 3atini reference wala indice.",
+            )
+        return _script_text(
+            target_script,
+            arabic="نجم نعاونك في produit معيّن، أما يلزمني reference ولا اسم أوضح باش نعطيك معلومة صحيحة.",
+            latin="Najjem n3awnek fi produit معيّن, ama yelzemni reference wala esm awdha7 bach na3tik ma3louma s7i7a.",
+        )
+
+    if intent == "order_tracking":
+        order_id = _first_non_empty(tool_result.get("order_id") if isinstance(tool_result, dict) else None, slots.get("order_id"))
+        if tool_status == "ok":
+            status_label = _status_label(tool_result.get("order_status"), target_script)
+            delivery = _delivery_phrase(tool_result, target_script)
+            response = _script_text(
+                target_script,
+                arabic=f"ثبتّ الطلبية {order_id}. حالتها توة {status_label}.",
+                latin=f"Thabbet el commande {order_id}. 7aletha taw {status_label}.",
+            )
+            if delivery:
+                response = f"{response} {delivery}."
+            return response
+        if tool_status == "verification_failed":
+            return _script_text(
+                target_script,
+                arabic="رقم الحريف ما يطابقش الطلبية هاذي. ثبتلي num client ولا bon de commande من جديد.",
+                latin="Num client ma ytetabe9ch m3a hedhi el commande. Thabetli num client wala bon de commande men jdid.",
+            )
+        if tool_status == "not_found":
+            return _script_text(
+                target_script,
+                arabic="ما لقيتش الطلبية بهالمعطيات. ثبتلي num client و bon de commande من فضلك.",
+                latin="Ma l9itech el commande bel ma3tiyet hedhom. Thabetli num client w bon de commande men fadhlik.",
+            )
+        return _script_text(
+            target_script,
+            arabic="نجم نتثبت على الطلبية، أما توا ما عنديش نتيجة مؤكدة. ثبتلي المعطيات من فضلك.",
+            latin="Najjem nthabet 3al commande, ama tawa ma 3andich natija m2akkda. Thabetli el ma3tiyet men fadhlik.",
+        )
+
+    if intent in {"create_order", "order_creation"}:
+        if tool_status == "collecting":
+            missing_from_tool = [str(item) for item in tool_result.get("missing_fields", []) if item] if isinstance(tool_result, dict) else []
+            if missing_from_tool:
+                return _missing_slot_prompt(missing_from_tool[0], target_script)
+        recommended_missing = [str(item) for item in (tool_result or {}).get("recommended_missing", []) if item] if isinstance(tool_result, dict) else []
+        draft_id = _first_non_empty((tool_result or {}).get("draft_id") if isinstance(tool_result, dict) else None)
+        recap_text = _first_non_empty((tool_result or {}).get("recap") if isinstance(tool_result, dict) else None, recap)
+        if recommended_missing:
+            return _script_text(
+                target_script,
+                arabic=f"حضرتلك draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. وزادة يلزمني {_slot_label(recommended_missing[0], target_script)} باش يكون الملف واضح.",
+                latin=f"Hadhartlek draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. W zeda yelzemni {_slot_label(recommended_missing[0], target_script)} bach ykoun el dossier wadha.",
+            )
+        return _script_text(
+            target_script,
+            arabic=f"مريقل، حضرتلك draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. إذا كل شي صحيح نكمل confirmation.",
+            latin=f"Mriguel, hadhartlek draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. Ken kol chay s7i7 nkammel confirmation.",
+        )
+
+    if intent == "availability_inquiry":
+        if tool_status == "ok":
+            match_summary = _render_match_summary(_primary_match_from_result(tool_result), target_script)
+            delivery = _delivery_phrase(tool_result, target_script)
+            head = (
+                _script_text(
+                    target_script,
+                    arabic=f"لقيت match على {match_summary}." if match_summary else "لقيت match مبدئي على المعطيات اللي بعثتهم.",
+                    latin=f"L9it match 3la {match_summary}." if match_summary else "L9it match mabda2i 3al ma3tiyet elli b3atthom.",
+                )
+            )
+            confirm = _script_text(
+                target_script,
+                arabic="أما disponibilité الفعلية يلزمها confirmation stock / backoffice.",
+                latin="Ama disponibilité el fi3liya يلزمha confirmation stock / backoffice.",
+            )
+            if delivery:
+                return f"{head} {confirm} {delivery}."
+            return f"{head} {confirm}"
+        return _script_text(
+            target_script,
+            arabic="باش نثبت disponibilité بدقة، عطيني reference ولا produit مع indice.",
+            latin="Bach nthabet disponibilité bed9a, 3atini reference wala produit m3a indice.",
+        )
+
+    if intent == "reference_confirmation":
+        if tool_status == "ok":
+            match_summary = _render_match_summary(_primary_match_from_result(tool_result), target_script)
+            reference = _first_non_empty(tool_result.get("reference"), slots.get("reference"))
+            return _script_text(
+                target_script,
+                arabic=f"الreference {reference} يظهرلي {match_summary or 'معروفة في الكاتالوغ'}. إذا تحب نكمل dispo ولا commande، قولي.",
+                latin=f"El reference {reference} yodhhorli {match_summary or 'ma3roufa fil catalogue'}. Ken t7eb nkammel dispo wala commande, 9olli.",
+            )
+        return _script_text(
+            target_script,
+            arabic="ما لقيتش reference واضحة. ثبتلي الكود من فضلك.",
+            latin="Ma l9itech reference wadha. Thabetli el code men fadhlik.",
+        )
+
+    if intent == "delivery_schedule":
+        if tool_status == "ok":
+            delivery = _delivery_phrase(tool_result, target_script)
+            return delivery or _script_text(
+                target_script,
+                arabic="عندي planning livraison، أما يلزمني agence ولا secteur أوضح باش نعطيك créneau مضبوط.",
+                latin="3andi planning livraison, ama yelzemni agence wala secteur awdha7 bach na3tik creneau madhbout.",
+            )
+        return _script_text(
+            target_script,
+            arabic="باش نعطيك créneau livraison، عطيني agence ولا ville ومعاها secteur إذا موجود.",
+            latin="Bach na3tik creneau livraison, 3atini agence wala ville w ma3ha secteur ken mawjoud.",
+        )
+
+    if intent == "appointment_booking":
+        if tool_status == "draft":
+            appointment_id = _first_non_empty(tool_result.get("appointment_id"))
+            city = _first_non_empty(tool_result.get("city"), slots.get("city"))
+            date = _first_non_empty(tool_result.get("date"), slots.get("date"))
+            time_slot = _first_non_empty(tool_result.get("time_slot"), slots.get("time_slot"))
+            return _script_text(
+                target_script,
+                arabic=f"حضرتلك rendez-vous draft {appointment_id} في {city} نهار {date} على {time_slot}. يلزم confirmation نهائي.",
+                latin=f"Hadhartlek rendez-vous draft {appointment_id} fi {city} nhar {date} 3la {time_slot}. Yelzem confirmation nehai.",
+            )
+        if recap and tool_name:
+            return _script_text(
+                target_script,
+                arabic=f"حضرت الطلب: {recap}. يلزم confirmation بشرية قبل التنفيذ.",
+                latin=f"Hadhart et demande: {recap}. Yelzem confirmation بشرية 9bal التنفيذ.",
+            )
+
+    if auto_execute_tool and tool_name and isinstance(tool_result, dict):
+        return _script_text(
+            target_script,
+            arabic=f"ثبتّ العملية {tool_name}. {recap}.",
+            latin=f"Thabbet el action {tool_name}. {recap}.",
+        )
+    return None
+
+
 def _render_collect_response(
     *,
     intent: str,
@@ -898,31 +1686,36 @@ def _render_collect_response(
     tool_name: str | None,
     tool_result: dict[str, Any] | None,
     auto_execute_tool: bool,
+    rag_results: list[dict[str, Any]],
+    target_script: str,
 ) -> str:
     if intent == "unknown":
-        return "Demande captee, mais l'intent n'est pas encore clair. Merci de reformuler ou de donner plus de contexte."
-    if intent == "get_num_client":
-        return "Intent detecte: get_num_client. Champ manquant: num_client."
-    if missing_slots:
-        return (
-            f"Intent detecte: {intent}. "
-            f"Champs detectes: {json.dumps(slots, ensure_ascii=False)}. "
-            f"Champs manquants: {', '.join(missing_slots)}."
-        )
-    if tool_name and tool_result is not None and auto_execute_tool:
-        return (
-            f"Intent detecte: {intent}. "
-            f"Action executee: {tool_name}. "
-            f"Resultat: {json.dumps(tool_result, ensure_ascii=False)}."
-        )
+        return _get_fallback_response("unclear", target_script=target_script)
+    scripted = _render_controlled_response(
+        intent=intent,
+        slots=slots,
+        missing_slots=missing_slots,
+        tool_name=tool_name,
+        tool_result=tool_result,
+        rag_results=rag_results,
+        auto_execute_tool=auto_execute_tool,
+        runtime_mode="collect_execute",
+        target_script=target_script,
+    )
+    if scripted:
+        return scripted
+    recap = _format_slots_recap(slots, target_script)
     if tool_name:
-        return (
-            f"Intent detecte: {intent}. "
-            f"Action preparee: {tool_name}. "
-            f"Parametres: {json.dumps(slots, ensure_ascii=False)}. "
-            "Validation humaine requise."
+        return _script_text(
+            target_script,
+            arabic=f"الإجراء {tool_name} حاضر. {recap or 'المعطيات واصلة'}. يلزم validation humaine.",
+            latin=f"El action {tool_name} hedhra. {recap or 'el ma3tiyet waslet'}. Yelzem validation humaine.",
         )
-    return f"Intent detecte: {intent}. Slots: {json.dumps(slots, ensure_ascii=False)}."
+    return _script_text(
+        target_script,
+        arabic=f"الintent {intent} واضح. {recap or 'نستنى المعطيات التالية.'}",
+        latin=f"El intent {intent} wadha. {recap or 'nesta nna el ma3tiyet ettalya.'}",
+    )
 
 
 def _select_few_shots(user_text: str, intent: str) -> list[dict[str, str]]:
@@ -969,15 +1762,36 @@ def _build_grounding_context(
     if session_state:
         parts.append(f"[session_state]\n{json.dumps(session_state, ensure_ascii=False)}")
     if tool_result:
-        parts.append(f"[tool_result]\n{json.dumps(tool_result, ensure_ascii=False)}")
+        summary = []
+        status = str(tool_result.get("status", "")).strip()
+        if status:
+            summary.append(f"status={status}")
+        for key in ["order_status", "order_id", "draft_id", "reference", "product", "index", "agence", "secteur", "next_slot"]:
+            value = _format_scalar(tool_result.get(key))
+            if value:
+                summary.append(f"{key}={value}")
+        match_summary = _render_match_summary(_primary_match_from_result(tool_result), "mixed")
+        if match_summary:
+            summary.append(f"match={match_summary}")
+        if summary:
+            parts.append("[tool_summary]\n" + "; ".join(summary))
     if missing_slots:
         parts.append(f"[missing_slots]\n{', '.join(missing_slots)}")
     if memory_hits:
-        joined_memory = "\n\n".join(hit["text"] for hit in memory_hits)
-        parts.append(f"[memory]\n{joined_memory}")
+        parts.append(f"[memory]\nrelevant_previous_turns={len(memory_hits)}")
     if rag_results:
-        joined_rag = "\n\n".join(f"{item['text']}" for item in rag_results[: CFG.retrieval_top_k])
-        parts.append(f"[retrieval]\n{joined_rag}")
+        rag_lines = []
+        for item in rag_results[: CFG.retrieval_top_k]:
+            metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            bits = [f"score={item.get('score', '')}"]
+            for key in ["code", "nom", "marque", "matiere", "diametre", "agence", "secteur", "premier_creneau"]:
+                value = _format_scalar(metadata.get(key))
+                if value:
+                    bits.append(f"{key}={value}")
+            if len(bits) > 1:
+                rag_lines.append("; ".join(bits))
+        if rag_lines:
+            parts.append("[retrieval_summary]\n" + "\n".join(rag_lines))
     if intent != "unknown":
         parts.append(f"[intent]\n{intent}")
     if slots:
@@ -993,6 +1807,21 @@ def _adapter_key(model_variant: str) -> str:
     return f"{model_variant}:{adapter_dir or 'base'}"
 
 
+def _production_marker_allows_base_model() -> bool:
+    marker = ADAPTERS_DIR / "active_production.json"
+    if not marker.exists():
+        return False
+    try:
+        payload = json.loads(marker.read_text(encoding="utf-8"))
+    except Exception:  # pragma: no cover - runtime environment dependent
+        return False
+    return bool(
+        payload.get("source_variant") == "base"
+        or payload.get("source") == "base_model"
+        or payload.get("adapter_present") is False
+    )
+
+
 def load_llm(model_variant: str = "prod") -> tuple[Any, Any]:
     cache_key = _adapter_key(model_variant)
     if cache_key in _MODEL_CACHE:
@@ -1004,7 +1833,12 @@ def load_llm(model_variant: str = "prod") -> tuple[Any, Any]:
 
         allow_fallback = CFG.should_allow_variant_fallback(model_variant)
         adapter_dir = CFG.resolve_adapter_dir(model_variant, allow_fallback=allow_fallback)
-        if model_variant == "prod" and not allow_fallback and adapter_dir is None:
+        if (
+            model_variant == "prod"
+            and not allow_fallback
+            and adapter_dir is None
+            and not _production_marker_allows_base_model()
+        ):
             raise FileNotFoundError("Production adapter not found. Promote a production adapter before serving.")
 
         logger.info("Loading LLM variant=%s", model_variant)
@@ -1105,7 +1939,7 @@ def _scrub_pii(text: str, slots: dict[str, Any]) -> str:
 
 
 def _strip_leaked_english(text: str, target_script: str) -> str:
-    if target_script == "arabizi":
+    if target_script in {"arabizi", "mixed"}:
         return text.strip()
 
     allowed = {"sivo", "dt", "indice", "progressive", "photochromic", "index"}
@@ -1137,21 +1971,45 @@ def _is_garbage_response(text: str) -> bool:
         return True
     if _CJK_RE.search(text):
         return True
+    lowered = text.lower()
+    if text.count(":") >= 3 and any(
+        marker in lowered
+        for marker in ["programme", "traitement", "diametre", "diamètre", "photochrom", "geometrie", "catalog", "source"]
+    ):
+        return True
+    if re.search(r"\b\d{2,3}\.\s*[:\-]", text):
+        return True
+    if "{" in text or "}" in text or "[tool_result]" in lowered or "[retrieval]" in lowered:
+        return True
     if text.count(text[:10]) > 4 if len(text) >= 10 else False:
         return True
     return False
 
 
-def _get_fallback_response(kind: str = "unclear") -> str:
+def _get_fallback_response(kind: str = "unclear", *, target_script: str = "arabic") -> str:
     organization = DOMAIN_CFG.get("organization", "your company")
-    dont_know = [
-        f"والله هالحكاية موش من خدمة {organization}. إذا تحب نعاونك في الموضوع اللي يخصنا قولي.",
-        "سامحني، ما عنديش معلومة صحيحة على الموضوع هذا وما نحبش نخمن.",
-    ]
-    unclear = [
-        "عاود قلي شنية تحتاج بالضبط باش نجم نعاونك.",
-        "المعلومة موش واضحة برشا، تنجم تفسرلي أكثر؟",
-    ]
+    dont_know = (
+        [
+            f"Walla hedha mouche men service mta3 {organization}. Ken t7eb n3awnek fi sujet ykhosna 9olli.",
+            "Same7ni, ma 3andich ma3louma s7i7a 3al sujet hedha w ma n7ebech nkhammem.",
+        ]
+        if target_script == "arabizi"
+        else [
+            f"والله هالحكاية موش من خدمة {organization}. إذا تحب نعاونك في الموضوع اللي يخصنا قولي.",
+            "سامحني، ما عنديش معلومة صحيحة على الموضوع هذا وما نحبش نخمن.",
+        ]
+    )
+    unclear = (
+        [
+            "3awed 9olli chnia t7eb bedhabt bach najem n3awnek.",
+            "El ma3louma mech wadha barcha, تنجم تفسرلي أكثر؟",
+        ]
+        if target_script == "arabizi"
+        else [
+            "عاود قلي شنية تحتاج بالضبط باش نجم نعاونك.",
+            "المعلومة موش واضحة برشا، تنجم تفسرلي أكثر؟",
+        ]
+    )
     return random.choice(dont_know if kind == "dont_know" else unclear)
 
 
@@ -1175,14 +2033,21 @@ def production_infer(
     target_script = _preferred_response_script(user_text)
 
     text = normalize_text(user_text)
+    explicit_topic_reset = _is_explicit_topic_reset(text)
     session_state = memory_store.get_session_state(session_id) if memory_store and session_id else {}
     extracted_slots = extract_slots(text)
     recovered_slots = _recover_missing_slots_from_turn(text, extracted_slots, session_state)
     if recovered_slots:
         extracted_slots = _merge_slots(extracted_slots, recovered_slots)
     raw_intent = infer_intent(text, extracted_slots=extracted_slots)
-    intent, slots = _resolve_turn_state(text, raw_intent, extracted_slots, session_state)
+    intent, slots, clear_task_state = _resolve_turn_state(text, raw_intent, extracted_slots, session_state)
     state_summary = _summarize_session_state(session_state)
+    rag_results: list[dict[str, Any]] = []
+    try:
+        rag_results = retriever.search(text, top_k=CFG.retrieval_top_k)
+    except Exception as exc:  # pragma: no cover - runtime environment dependent
+        logger.warning("RAG retrieval failed: %s", exc)
+        rag_results = []
 
     normalized_text = _norm_for_matching(text)
     raw_normalized_text = _norm_for_matching(user_text)
@@ -1194,12 +2059,12 @@ def production_infer(
     if out_of_domain:
         latency = round((time.perf_counter() - start) * 1000, 1)
         return {
-            "response": _get_fallback_response("dont_know"),
+            "response": _get_fallback_response("dont_know", target_script=target_script),
             "intent": intent,
             "slots": slots,
             "tool_call": None,
             "tool_result": None,
-            "rag_results": [],
+            "rag_results": rag_results,
             "memory_hits": [],
             "missing_slots": [],
             "session_state": state_summary,
@@ -1207,6 +2072,9 @@ def production_infer(
             "latency_ms": latency,
             "model_variant": model_variant,
             "runtime_mode": runtime_mode,
+            "response_source": "fallback",
+            "response_script_target": target_script,
+            "response_script_detected": target_script,
             "correction_applied": False,
         }
 
@@ -1214,15 +2082,16 @@ def production_infer(
         all(char.isascii() or char.isspace() for char in user_text.strip())
         and len(user_text.split()) <= 2
         and intent == "unknown"
+        and not explicit_topic_reset
     ):
         latency = round((time.perf_counter() - start) * 1000, 1)
         return {
-            "response": _get_fallback_response("unclear"),
+            "response": _get_fallback_response("unclear", target_script=target_script),
             "intent": intent,
             "slots": slots,
             "tool_call": None,
             "tool_result": None,
-            "rag_results": [],
+            "rag_results": rag_results,
             "memory_hits": [],
             "missing_slots": [],
             "session_state": state_summary,
@@ -1230,6 +2099,9 @@ def production_infer(
             "latency_ms": latency,
             "model_variant": model_variant,
             "runtime_mode": runtime_mode,
+            "response_source": "fallback",
+            "response_script_target": target_script,
+            "response_script_detected": target_script,
             "correction_applied": False,
         }
 
@@ -1242,10 +2114,6 @@ def production_infer(
         tool_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
         if tool_missing:
             missing_slots = list(dict.fromkeys([*missing_slots, *tool_missing]))
-
-    rag_results = []
-    if intent not in {"greeting", "thanks"}:
-        rag_results = retriever.search(text, top_k=CFG.retrieval_top_k)
 
     memory_hits = []
     if memory_store and session_id:
@@ -1260,69 +2128,15 @@ def production_infer(
             runtime_mode=runtime_mode,
         )
 
-    messages: list[dict[str, str]] = []
-    for prompt in _resolve_system_prompt_messages(
-        user_script=user_script,
-        target_script=target_script,
-        intent=intent,
-    ):
-        messages.append({"role": "system", "content": prompt})
-    messages.extend(
-        [
-            {"role": "system", "content": _mode_instruction(runtime_mode)},
-            {"role": "system", "content": _script_instruction(target_script)},
-        ]
-    )
-    messages.extend(_select_few_shots(text, intent))
-
-    if history:
-        for message in history[-CFG.max_history_messages :]:
-            role = message.get("role")
-            content = message.get("content")
-            if role in {"user", "assistant"} and content:
-                messages.append({"role": role, "content": content})
-
-    context = _build_grounding_context(
-        intent=intent,
-        slots=slots,
-        missing_slots=missing_slots,
-        tool_result=tool_result,
-        rag_results=rag_results,
-        memory_hits=memory_hits,
-        session_state=state_summary,
-    )
-    if context:
-        messages.append({"role": "system", "content": context})
-
-    if correction_match and correction_match.get("action", "replace") != "replace":
-        messages.append(
-            {
-                "role": "system",
-                "content": f"[admin_correction_hint]\n{correction_match.get('corrected_response', '')}",
-            }
-        )
-
-    if intent == "unknown":
-        messages.append(
-            {
-                "role": "system",
-                "content": "إذا ما فهمتش الطلب، اطلب توضيح مختصر وواضح. ما تجاوبش على حاجة موش واضحة.",
-            }
-        )
-    elif intent == "get_num_client":
-        messages.append(
-            {
-                "role": "system",
-                "content": "Ask only for num_client first. Do not continue order tracking or order creation until num_client is confirmed.",
-            }
-        )
-
-    messages.append({"role": "user", "content": text})
-
     correction_applied = False
-    if correction_match and correction_match.get("action", "replace") == "replace":
+    response_source = "generated"
+    if explicit_topic_reset and intent == "unknown":
+        response = _topic_reset_response(target_script)
+        response_source = "topic_reset"
+    elif correction_match and correction_match.get("action", "replace") == "replace":
         response = str(correction_match.get("corrected_response", "")).strip()
         correction_applied = True
+        response_source = "admin_correction"
     elif runtime_mode == "collect_execute":
         response = _render_collect_response(
             intent=intent,
@@ -1331,22 +2145,99 @@ def production_infer(
             tool_name=tool_name,
             tool_result=tool_result,
             auto_execute_tool=auto_execute_tool,
+            rag_results=rag_results,
+            target_script=target_script,
         )
+        response_source = "collect_execute"
     else:
-        response = _generate(messages, model_variant=model_variant)
-        response = _scrub_pii(response, slots)
-        response = _strip_leaked_english(response, target_script=target_script)
-        response = _humanize(response)
-        if _is_script_mismatch(response, target_script):
-            retry_messages = _build_script_retry_messages(messages, target_script)
-            response = _generate(retry_messages, model_variant=model_variant)
+        controlled_response = _render_controlled_response(
+            intent=intent,
+            slots=slots,
+            missing_slots=missing_slots,
+            tool_name=tool_name,
+            tool_result=tool_result,
+            rag_results=rag_results,
+            auto_execute_tool=auto_execute_tool,
+            runtime_mode=runtime_mode,
+            target_script=target_script,
+        )
+        if controlled_response:
+            response = controlled_response
+            response_source = "controlled_template"
+        else:
+            messages: list[dict[str, str]] = []
+            for prompt in _resolve_system_prompt_messages(
+                user_script=user_script,
+                target_script=target_script,
+                intent=intent,
+            ):
+                messages.append({"role": "system", "content": prompt})
+            messages.extend(
+                [
+                    {"role": "system", "content": _mode_instruction(runtime_mode)},
+                    {"role": "system", "content": _script_instruction(target_script)},
+                ]
+            )
+            messages.extend(_select_few_shots(text, intent))
+
+            if history:
+                for message in history[-CFG.max_history_messages :]:
+                    role = message.get("role")
+                    content = message.get("content")
+                    if role in {"user", "assistant"} and content:
+                        messages.append({"role": role, "content": content})
+
+            context = _build_grounding_context(
+                intent=intent,
+                slots=slots,
+                missing_slots=missing_slots,
+                tool_result=tool_result,
+                rag_results=rag_results,
+                memory_hits=memory_hits,
+                session_state=state_summary,
+            )
+            if context:
+                messages.append({"role": "system", "content": context})
+
+            if correction_match and correction_match.get("action", "replace") != "replace":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": f"[admin_correction_hint]\n{correction_match.get('corrected_response', '')}",
+                    }
+                )
+
+            if intent == "unknown":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "إذا ما فهمتش الطلب، اطلب توضيح مختصر وواضح. ما تجاوبش على حاجة موش واضحة.",
+                    }
+                )
+            elif intent == "get_num_client":
+                messages.append(
+                    {
+                        "role": "system",
+                        "content": "Ask only for num_client first. Do not continue order tracking or order creation until num_client is confirmed.",
+                    }
+                )
+
+            messages.append({"role": "user", "content": text})
+            response = _generate(messages, model_variant=model_variant)
             response = _scrub_pii(response, slots)
             response = _strip_leaked_english(response, target_script=target_script)
             response = _humanize(response)
-        response = _truncate(response)
+            if _is_script_mismatch(response, target_script):
+                retry_messages = _build_script_retry_messages(messages, target_script)
+                response = _generate(retry_messages, model_variant=model_variant)
+                response = _scrub_pii(response, slots)
+                response = _strip_leaked_english(response, target_script=target_script)
+                response = _humanize(response)
+            response = _truncate(response)
 
     if _is_garbage_response(response):
-        response = _get_fallback_response("unclear")
+        response = _get_fallback_response("unclear", target_script=target_script)
+        response_source = "fallback"
 
     tool_status = str((tool_result or {}).get("status", "")).lower() if isinstance(tool_result, dict) else ""
     needs_human_review = bool(missing_slots) or bool(tool_name and not auto_execute_tool and runtime_mode != "collect_execute")
@@ -1362,14 +2253,16 @@ def production_infer(
             review_required=needs_human_review,
             tool_call={"name": tool_name, "args": tool_args} if tool_name else None,
             tool_result=tool_result,
+            clear_task_state=clear_task_state,
         )
 
     latency = round((time.perf_counter() - start) * 1000, 1)
     logger.info(
-        "infer variant=%s intent=%s tool=%s latency=%.1fms",
+        "infer variant=%s intent=%s tool=%s response_source=%s latency=%.1fms",
         model_variant,
         intent,
         tool_name,
+        response_source,
         latency,
     )
 
@@ -1387,6 +2280,7 @@ def production_infer(
         "latency_ms": latency,
         "model_variant": model_variant,
         "runtime_mode": runtime_mode,
+        "response_source": response_source,
         "response_script_target": target_script,
         "response_script_detected": _detect_script_like(response),
         "correction_applied": correction_applied,

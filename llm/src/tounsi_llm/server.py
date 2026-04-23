@@ -23,6 +23,7 @@ app = FastAPI(title="Configurable Call Center LLM", version="3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CFG.cors_allowed_origins,
+    allow_origin_regex=r"https://[a-z0-9-]+\.devtunnels\.ms",
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -80,6 +81,9 @@ class ChatResponse(BaseModel):
     needs_human_review: bool = False
     model_variant: str = "prod"
     runtime_mode: str = "speak"
+    response_source: str = "generated"
+    response_script_target: str = "arabic"
+    response_script_detected: str = "arabic"
     correction_applied: bool = False
     routing_reason: str = ""
 
@@ -229,6 +233,9 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
         needs_human_review=result.get("needs_human_review", False),
         model_variant=result.get("model_variant", req.model_variant),
         runtime_mode=result.get("runtime_mode", req.runtime_mode or "speak"),
+        response_source=result.get("response_source", "generated"),
+        response_script_target=result.get("response_script_target", "arabic"),
+        response_script_detected=result.get("response_script_detected", "arabic"),
         correction_applied=result.get("correction_applied", False),
         routing_reason=result["intent"],
     )
@@ -238,11 +245,7 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
 async def health(_: None = Depends(_authorize)) -> dict:
     retriever_info = None
     if _retriever is not None:
-        retriever_info = {
-            "chunks": len(_retriever.docs),
-            "embedding_backend": _retriever.embedding_backend.backend_name,
-            "faiss_enabled": bool(_retriever._index is not None),
-        }
+        retriever_info = _retriever.stats()
 
     return {
         "status": "ok",

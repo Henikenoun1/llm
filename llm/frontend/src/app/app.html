@@ -4,12 +4,12 @@
       <div class="brand-mark">SC</div>
       <div class="brand-copy">
         <h1>Sanawnaw Care Desk</h1>
-        <p>{{ health()?.domain?.organization || 'Call Center LLM' }} · {{ health()?.domain?.assistant_name || 'Assistant' }}</p>
+        <p>{{ health()?.domain?.organization || 'Call Center LLM' }} · espace conversation</p>
       </div>
     </div>
 
     <nav class="workspace-nav">
-      <button type="button" [class.active]="activeView() === 'assistant'" (click)="setView('assistant')">Assistant</button>
+      <button type="button" [class.active]="activeView() === 'assistant'" (click)="setView('assistant')">Conversation</button>
       <button type="button" [class.active]="activeView() === 'recommendation'" (click)="setView('recommendation')">Recommandation</button>
     </nav>
 
@@ -20,26 +20,30 @@
       </div>
 
       @if (activeView() === 'assistant') {
-        <div class="chip-group">
-          <button type="button" [class.active]="selectedVariant() === 'prod'" (click)="setVariant('prod')">Prod</button>
-          <button type="button" [class.active]="selectedVariant() === 'dpo'" (click)="setVariant('dpo')">DPO</button>
-        </div>
+        <label class="variant-select">
+          <span>Variant</span>
+          <select [ngModel]="selectedVariant()" (ngModelChange)="setVariant($event)">
+            @for (variant of variantOptions(); track variant) {
+              <option [value]="variant">{{ variant }}</option>
+            }
+          </select>
+        </label>
 
         <div class="chip-group">
-          <button type="button" [class.active]="selectedRuntimeMode() === 'collect_execute'" (click)="setRuntimeMode('collect_execute')">Collect</button>
-          <button type="button" [class.active]="selectedRuntimeMode() === 'speak'" (click)="setRuntimeMode('speak')">Speak</button>
-          <button type="button" [class.active]="selectedRuntimeMode() === 'autonomous'" (click)="setRuntimeMode('autonomous')">Auto</button>
+          <button type="button" [class.active]="selectedRuntimeMode() === 'collect_execute'" (click)="setRuntimeMode('collect_execute')">Collecte</button>
+          <button type="button" [class.active]="selectedRuntimeMode() === 'speak'" (click)="setRuntimeMode('speak')">Discussion</button>
+          <button type="button" [class.active]="selectedRuntimeMode() === 'autonomous'" (click)="setRuntimeMode('autonomous')">Autonome</button>
         </div>
       }
 
-      <button type="button" class="ghost" (click)="refreshRuntime()">Refresh</button>
+      <button type="button" class="ghost" (click)="refreshRuntime()">Actualiser</button>
       <button type="button" class="ghost" (click)="toggleDebug()">Debug</button>
       <button
         type="button"
         class="ghost"
         (click)="activeView() === 'assistant' ? clearChat() : clearRecommendation()"
       >
-        Reset
+        Nouveau sujet
       </button>
     </div>
   </header>
@@ -48,60 +52,90 @@
     <section class="conversation-pane">
       @if (activeView() === 'assistant') {
         <div class="pane-head">
-          <h2>Assistant Conversationnel</h2>
-          <p>Mode {{ selectedRuntimeMode() }} · Variante {{ selectedVariant() }}</p>
+          <div class="pane-head-copy">
+            <h2>Assistant conversationnel</h2>
+            <p>Session {{ currentSessionId() }} · mode {{ selectedRuntimeMode() }} · variant {{ selectedVariant() }}</p>
+          </div>
+
+          <div class="pane-head-side">
+            <div class="pane-kpis">
+              <div class="kpi-chip">
+                <span>Turns</span>
+                <strong>{{ assistantTurnCount() }}</strong>
+              </div>
+              <div class="kpi-chip">
+                <span>Avg latency</span>
+                <strong>{{ formatLatency(averageLatencyMs() ?? undefined) }}</strong>
+              </div>
+              <div class="kpi-chip warn">
+                <span>Review</span>
+                <strong>{{ needsReviewCount() }}</strong>
+              </div>
+            </div>
+
+            <button type="button" class="ghost mobile-only" (click)="toggleInspector()">
+              {{ inspectorOpen() ? 'Fermer details' : 'Details' }}
+            </button>
+          </div>
         </div>
 
-        @if (messages().length === 0) {
-          <div class="empty-state">
-            <h3>Démarrez une conversation métier</h3>
-            <p>Le chatbot utilise RAG + outils métier avec un style tunisien professionnel.</p>
-            <div class="suggestion-grid">
-              @for (suggestion of suggestions; track suggestion) {
-                <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+        <div class="conversation-stage">
+          @if (messages().length === 0) {
+            <div class="empty-state scroll-panel">
+              <h3>Messages rapides</h3>
+              <p>Utilise ces exemples pour tester le suivi, la commande, la livraison et la détection des infos client sans repartir de zero.</p>
+              <div class="suggestion-grid">
+                @for (suggestion of assistantSuggestions; track suggestion) {
+                  <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+                }
+              </div>
+            </div>
+          }
+
+          @if (messages().length > 0) {
+            <div class="messages" #chatContainer>
+              @for (message of messages(); track message.timestamp) {
+                <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
+                  <button type="button" class="bubble" [class.selected]="selectedMessage() === message" (click)="selectMessage(message)">
+                    <div class="message-text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
+                    @if (message.meta) {
+                      <div class="meta-row">
+                        <span>{{ message.meta.intent }}</span>
+                        <span>{{ formatLatency(message.meta.latencyMs) }}</span>
+                        @if (message.meta.needsHumanReview) {
+                          <span class="warning-badge">review</span>
+                        }
+                        @if (message.meta.correctionApplied) {
+                          <span class="success-badge">admin fix</span>
+                        }
+                        @if (showDebug()) {
+                          <span>tool: {{ toolName(message) }}</span>
+                          <span>src: {{ formatSourceLabel(message.meta.responseSource) }}</span>
+                          <span>{{ message.meta.modelVariant }}</span>
+                          <span>{{ message.meta.runtimeMode }}</span>
+                          <span>{{ formatScriptLabel(message.meta.responseScriptTarget) }} → {{ formatScriptLabel(message.meta.responseScriptDetected) }}</span>
+                        }
+                      </div>
+                    }
+                  </button>
+                </article>
+              }
+
+              @if (isLoading()) {
+                <article class="message assistant">
+                  <div class="bubble loading">Le modèle prépare une réponse...</div>
+                </article>
               }
             </div>
-          </div>
-        }
-
-        @if (messages().length > 0) {
-          <div class="messages" #chatContainer>
-            @for (message of messages(); track message.timestamp) {
-              <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
-                <button type="button" class="bubble" (click)="selectMessage(message)">
-                  <div class="message-text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
-                  @if (message.meta) {
-                    <div class="meta-row">
-                      <span>{{ message.meta.intent }}</span>
-                      <span>{{ message.meta.modelVariant }}</span>
-                      <span>{{ message.meta.runtimeMode }}</span>
-                      @if (message.meta.needsHumanReview) {
-                        <span>review</span>
-                      }
-                      @if (message.meta.correctionApplied) {
-                        <span>admin-fix</span>
-                      }
-                      <span>{{ message.meta.latencyMs }} ms</span>
-                    </div>
-                  }
-                </button>
-              </article>
-            }
-
-            @if (isLoading()) {
-              <article class="message assistant">
-                <div class="bubble loading">Le modele prepare une reponse...</div>
-              </article>
-            }
-          </div>
-        }
+          }
+        </div>
 
         <div class="composer">
           <textarea
             [(ngModel)]="inputText"
             [disabled]="isLoading()"
             (keydown)="onKeyDown($event)"
-            placeholder="Posez votre question métier..."
+            placeholder="Ex: suivi commande ORD-ABC12345, num client 5007..."
             rows="2"
           ></textarea>
           <button type="button" class="send" (click)="send()" [disabled]="isLoading() || !inputText.trim()">Envoyer</button>
@@ -110,44 +144,48 @@
 
       @if (activeView() === 'recommendation') {
         <div class="pane-head">
-          <h2>Assistant Recommandation Verres</h2>
-          <p>Endpoint spécialisé basé sur le guide officiel Scenario Reco</p>
+          <div>
+            <h2>Assistant Recommandation Verres</h2>
+            <p>Endpoint spécialisé basé sur le guide officiel Scenario Reco</p>
+          </div>
         </div>
 
-        @if (recommendationMessages().length === 0) {
-          <div class="empty-state">
-            <h3>Conseil optique guidé</h3>
-            <p>Le moteur combine règles officielles + retrieval RAG pour produire une recommandation traçable.</p>
-            <div class="suggestion-grid">
-              @for (suggestion of recommendationSuggestions; track suggestion) {
-                <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+        <div class="conversation-stage">
+          @if (recommendationMessages().length === 0) {
+            <div class="empty-state scroll-panel">
+              <h3>Conseil optique guidé</h3>
+              <p>Le moteur combine règles officielles et retrieval RAG pour produire une recommandation traçable.</p>
+              <div class="suggestion-grid">
+                @for (suggestion of recommendationSuggestions; track suggestion) {
+                  <button type="button" (click)="applyQuickSuggestionForCurrentView(suggestion)">{{ suggestion }}</button>
+                }
+              </div>
+            </div>
+          }
+
+          @if (recommendationMessages().length > 0) {
+            <div class="messages" #recoContainer>
+              @for (message of recommendationMessages(); track message.timestamp) {
+                <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
+                  <button type="button" class="bubble" [class.selected]="selectedMessage() === message" (click)="selectMessage(message)">
+                    <div class="message-text">{{ message.text }}</div>
+                    @if (message.meta?.missingFields?.length) {
+                      <div class="meta-row">
+                        <span>missing: {{ message.meta?.missingFields?.length }}</span>
+                      </div>
+                    }
+                  </button>
+                </article>
+              }
+
+              @if (recommendationLoading()) {
+                <article class="message assistant">
+                  <div class="bubble loading">Analyse du profil et application du guide officiel...</div>
+                </article>
               }
             </div>
-          </div>
-        }
-
-        @if (recommendationMessages().length > 0) {
-          <div class="messages" #recoContainer>
-            @for (message of recommendationMessages(); track message.timestamp) {
-              <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
-                <button type="button" class="bubble" (click)="selectMessage(message)">
-                  <div class="message-text">{{ message.text }}</div>
-                  @if (message.meta?.missingFields?.length) {
-                    <div class="meta-row">
-                      <span>missing: {{ message.meta?.missingFields?.length }}</span>
-                    </div>
-                  }
-                </button>
-              </article>
-            }
-
-            @if (recommendationLoading()) {
-              <article class="message assistant">
-                <div class="bubble loading">Analyse du profil et application du guide officiel...</div>
-              </article>
-            }
-          </div>
-        }
+          }
+        </div>
 
         <div class="composer">
           <textarea
@@ -169,13 +207,196 @@
       }
     </section>
 
-    <aside class="insights-pane">
+    <aside class="insights-pane" [class.open]="inspectorOpen()">
+      <div class="insights-mobile-head mobile-only">
+        <h3>Details</h3>
+        <button type="button" class="ghost" (click)="closeInspector()">Fermer</button>
+      </div>
+
       <section class="card compact">
-        <h3>Runtime</h3>
+        <h3>Etat Systeme</h3>
         <p>Status: <strong>{{ backendOnline() ? 'Online' : 'Offline' }}</strong></p>
+        <p>Session chat: <strong>{{ currentSessionId() }}</strong></p>
         <p>RAG chunks: <strong>{{ health()?.rag?.chunks ?? 0 }}</strong></p>
         <p>Embedding: <strong>{{ health()?.rag?.embedding_backend || 'N/A' }}</strong></p>
+        <p>Default variant: <strong>{{ models()?.default_variant || 'prod' }}</strong></p>
       </section>
+
+      @if (activeView() === 'assistant') {
+        <section class="card">
+          <h3>QA Summary</h3>
+          <div class="summary-grid">
+            <div>
+              <span>Current variant</span>
+              <strong>{{ selectedVariant() }}</strong>
+            </div>
+            <div>
+              <span>Runtime mode</span>
+              <strong>{{ selectedRuntimeMode() }}</strong>
+            </div>
+            <div>
+              <span>Assistant turns</span>
+              <strong>{{ assistantTurnCount() }}</strong>
+            </div>
+            <div>
+              <span>Review needed</span>
+              <strong>{{ needsReviewCount() }}</strong>
+            </div>
+          </div>
+
+          @if (latestAssistantMessage()?.meta) {
+            <div class="latest-strip">
+              <span>{{ latestAssistantMessage()?.meta?.intent }}</span>
+              <span>{{ toolName(latestAssistantMessage()!) }}</span>
+              <span>{{ formatSourceLabel(latestAssistantMessage()?.meta?.responseSource) }}</span>
+              <span>{{ formatLatency(latestAssistantMessage()?.meta?.latencyMs) }}</span>
+            </div>
+          }
+        </section>
+
+        @if (selectedMeta()) {
+          <section class="card">
+            <h3>Message Selectionne</h3>
+            <div class="summary-grid">
+              <div>
+                <span>Intent</span>
+                <strong>{{ selectedMeta()?.intent || 'N/A' }}</strong>
+              </div>
+              <div>
+                <span>Tool</span>
+                <strong>{{ selectedMeta()?.toolCall?.name || 'none' }}</strong>
+              </div>
+              <div>
+                <span>Tool status</span>
+                <strong>{{ toolStatus(selectedMessage()!) }}</strong>
+              </div>
+              <div>
+                <span>Response source</span>
+                <strong>{{ formatSourceLabel(selectedMeta()?.responseSource) }}</strong>
+              </div>
+              <div>
+                <span>Script target</span>
+                <strong>{{ formatScriptLabel(selectedMeta()?.responseScriptTarget) }}</strong>
+              </div>
+              <div>
+                <span>Script detected</span>
+                <strong>{{ formatScriptLabel(selectedMeta()?.responseScriptDetected) }}</strong>
+              </div>
+              <div>
+                <span>Latency</span>
+                <strong>{{ formatLatency(selectedMeta()?.latencyMs) }}</strong>
+              </div>
+              <div>
+                <span>Needs review</span>
+                <strong>{{ selectedMeta()?.needsHumanReview ? 'yes' : 'no' }}</strong>
+              </div>
+            </div>
+          </section>
+
+          @if (selectedSlots().length > 0) {
+            <section class="card">
+              <h3>Extracted Slots</h3>
+              <div class="kv-list">
+                @for (row of selectedSlots(); track row.key) {
+                  <div class="kv-row">
+                    <span>{{ formatLabel(row.key) }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </div>
+                }
+              </div>
+            </section>
+          }
+
+          @if (selectedToolArguments().length > 0) {
+            <section class="card">
+              <h3>Tool Arguments</h3>
+              <div class="kv-list">
+                @for (row of selectedToolArguments(); track row.key) {
+                  <div class="kv-row">
+                    <span>{{ formatLabel(row.key) }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </div>
+                }
+              </div>
+            </section>
+          }
+
+          @if (selectedToolResultRows().length > 0) {
+            <section class="card">
+              <h3>Tool Result</h3>
+              <div class="kv-list">
+                @for (row of selectedToolResultRows(); track row.key) {
+                  <div class="kv-row">
+                    <span>{{ formatLabel(row.key) }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </div>
+                }
+              </div>
+            </section>
+          }
+
+          @if (selectedSessionState().length > 0) {
+            <section class="card">
+              <h3>Session State</h3>
+              <div class="kv-list">
+                @for (row of selectedSessionState(); track row.key) {
+                  <div class="kv-row">
+                    <span>{{ formatLabel(row.key) }}</span>
+                    <strong>{{ row.value }}</strong>
+                  </div>
+                }
+              </div>
+            </section>
+          }
+
+          @if (selectedRagResults().length > 0) {
+            <section class="card">
+              <h3>RAG Evidence</h3>
+              <div class="rag-list">
+                @for (item of selectedRagResults(); track $index) {
+                  <article class="rag-item">
+                    <div class="rag-topline">
+                      <span>score {{ item['score'] }}</span>
+                      <span>{{ item['source'] }}</span>
+                    </div>
+
+                    @if (ragMetaRows(item).length > 0) {
+                      <div class="kv-list compact">
+                        @for (row of ragMetaRows(item); track row.key) {
+                          <div class="kv-row">
+                            <span>{{ formatLabel(row.key) }}</span>
+                            <strong>{{ row.value }}</strong>
+                          </div>
+                        }
+                      </div>
+                    }
+
+                    @if (ragTextPreview(item)) {
+                      <p>{{ ragTextPreview(item) }}</p>
+                    }
+                  </article>
+                }
+              </div>
+            </section>
+          }
+        }
+
+        @if (showDebug()) {
+          <section class="card">
+            <h3>Available Tools</h3>
+            <div class="tool-list">
+              @for (tool of tools(); track tool.name) {
+                <article class="tool-item">
+                  <div>
+                    <strong>{{ tool.name }}</strong>
+                    <p>{{ tool.description }}</p>
+                  </div>
+                </article>
+              }
+            </div>
+          </section>
+        }
+      }
 
       @if (activeView() === 'recommendation') {
         <section class="card">
@@ -322,13 +543,6 @@
         </section>
       }
 
-      @if (activeView() === 'assistant' && selectedMessage()?.meta) {
-        <section class="card">
-          <h3>Message Meta</h3>
-          <pre>{{ formatJson(selectedMessage()?.meta) }}</pre>
-        </section>
-      }
-
       @if (showDebug()) {
         <section class="card">
           <h3>Debug Runtime</h3>
@@ -341,4 +555,8 @@
       }
     </aside>
   </main>
+
+  @if (inspectorOpen()) {
+    <button type="button" class="inspector-backdrop mobile-only" (click)="closeInspector()" aria-label="Fermer les details"></button>
+  }
 </div>

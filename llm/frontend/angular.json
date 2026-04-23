@@ -66,8 +66,8 @@
                 },
                 {
                   "type": "anyComponentStyle",
-                  "maximumWarning": "4kB",
-                  "maximumError": "8kB"
+                  "maximumWarning": "12kB",
+                  "maximumError": "14kB"
                 }
               ],
               "outputHashing": "all"
@@ -93,6 +93,7 @@
           "defaultConfiguration": "development",
           "options": {
             "host": "0.0.0.0",
+            "proxyConfig": "proxy.conf.json",
             "allowedHosts": [
               ".devtunnels.ms"
             ]

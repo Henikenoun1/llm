@@ -30,6 +30,13 @@ INTENT_ALIASES = {
     "commande_creation": "create_order",
 }
 
+NON_STICKY_INTENTS = {
+    "unknown",
+    "greeting",
+    "thanks",
+    "get_num_client",
+}
+
 SLOT_NAME_ALIASES = {
     "customer_id": "num_client",
     "customerid": "num_client",
@@ -202,6 +209,10 @@ def canonicalize_intent(intent: Any) -> str:
         return "unknown"
     lowered = raw.lower()
     return INTENT_ALIASES.get(lowered, lowered)
+
+
+def is_sticky_intent(intent: Any) -> bool:
+    return canonicalize_intent(intent) not in NON_STICKY_INTENTS
 
 
 def canonicalize_slot_name(name: Any) -> str:
