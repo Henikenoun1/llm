@@ -35,6 +35,7 @@ ARTIFACTS_DIR = ROOT / "artifacts"
 ADAPTERS_DIR = ARTIFACTS_DIR / "adapters"
 CHECKPOINTS_DIR = ARTIFACTS_DIR / "checkpoints"
 CACHE_DIR = ARTIFACTS_DIR / "cache"
+RAG_ARTIFACTS_DIR = ARTIFACTS_DIR / "rag"
 MANIFESTS_DIR = ARTIFACTS_DIR / "manifests"
 SCHEMAS_DIR = ARTIFACTS_DIR / "schemas"
 
@@ -53,6 +54,7 @@ for directory in [
     ADAPTERS_DIR,
     CHECKPOINTS_DIR,
     CACHE_DIR,
+    RAG_ARTIFACTS_DIR,
     MANIFESTS_DIR,
     SCHEMAS_DIR,
     REPORTS_DIR,
@@ -257,28 +259,43 @@ class ProjectConfig:
     fp16: bool = True
     bf16: bool = False
 
-    self_sup_learning_rate: float = 6e-5
-    sft_learning_rate: float = 8e-5
-    dpo_learning_rate: float = 4e-6
-    epochs_self_sup: int = 2
-    epochs_sft: int = 3
-    epochs_dpo: int = 1
+    self_sup_learning_rate: float = 4e-5
+    sft_learning_rate: float = 6e-5
+    dpo_learning_rate: float = 1e-6
+    epochs_self_sup: int = 3
+    epochs_sft: int = 5
+    epochs_dpo: int = 2
     self_sup_max_seq_len: int = 1024
     sft_max_seq_len: int = 1536
     dpo_max_seq_len: int = 1024
     self_sup_target_texts: int | None = 104000
-    self_sup_max_steps: int = 1800
-    sft_max_steps: int | None = 2400
-    dpo_max_steps: int = 600
+    self_sup_max_steps: int | None = None
+    sft_max_steps: int | None = None
+    dpo_max_steps: int | None = None
     self_sup_continue_from_adapter: bool = False
     optim: str = "paged_adamw_8bit"
     lr_scheduler_type: str = "cosine"
     max_grad_norm: float = 0.3
     save_total_limit: int = 1
-    early_stopping_patience: int = 2
+    early_stopping_patience: int = 50
+    max_sft_train_repeats: int = 3
+    min_sft_unique_conversations: int = 8000
+    sft_augmented_variants_per_row: int = 4
+    sft_slot_bootstrap_limit: int = 900
+    sft_rag_delivery_limit: int = 180
+    sft_rag_lens_limit: int = 1600
+    sft_fallback_augmented_variants_per_row: int = 6
+    sft_fallback_slot_bootstrap_limit: int = 2200
+    sft_fallback_rag_delivery_limit: int = 260
+    sft_fallback_rag_lens_limit: int = 2400
+    block_toxic_content: bool = True
     min_self_sup_train_rows: int = 25000
-    min_sft_train_rows: int = 8000
+    min_sft_train_rows: int = 15000
     min_dpo_train_rows: int = 3000
+    min_self_sup_clean_tounsi_rate: float = 88.0
+    required_sft_assistant_clean_rate: float = 98.5
+    required_sft_domain_rate: float = 95.0
+    required_dpo_domain_rate: float = 95.0
 
     temperature: float = 0.35
     top_p: float = 0.9

@@ -1,6 +1,8 @@
 import sys
 import unittest
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -10,6 +12,7 @@ if str(ROOT) not in sys.path:
 from src.tounsi_llm.inference import (
     _build_grounding_context,
     _get_fallback_response,
+    _is_garbage_response,
     _render_controlled_response,
 )
 
@@ -130,6 +133,84 @@ class InferenceResponseTests(unittest.TestCase):
         assert response is not None
         self.assertIn("5007", response)
         self.assertNotIn("3atini num client", response.lower())
+
+    def test_greeting_response_softens_social_check_in(self) -> None:
+        response = _render_controlled_response(
+            intent="greeting",
+            user_text="chhalek",
+            slots={},
+            missing_slots=[],
+            tool_name=None,
+            tool_result=None,
+            rag_results=[],
+            auto_execute_tool=False,
+            runtime_mode="speak",
+            target_script="arabizi",
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("hamdoullah", response.lower())
+        self.assertIn("n3awnek", response.lower())
+
+    def test_agent_identity_response_mentions_name_and_role(self) -> None:
+        response = _render_controlled_response(
+            intent="agent_identity",
+            slots={},
+            missing_slots=[],
+            tool_name=None,
+            tool_result=None,
+            rag_results=[],
+            auto_execute_tool=False,
+            runtime_mode="speak",
+            target_script="arabizi",
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("Mohsen", response)
+        self.assertIn("SIVO", response)
+        self.assertIn("suivi commande", response.lower())
+
+    def test_current_date_response_uses_tunisia_date(self) -> None:
+        response = _render_controlled_response(
+            intent="current_date",
+            slots={},
+            missing_slots=[],
+            tool_name=None,
+            tool_result=None,
+            rag_results=[],
+            auto_execute_tool=False,
+            runtime_mode="speak",
+            target_script="arabizi",
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        today = datetime.now(ZoneInfo("Africa/Tunis")).strftime("%d/%m/%Y")
+        self.assertIn(today, response)
+
+    def test_clarify_need_response_does_not_ask_num_client_first(self) -> None:
+        response = _render_controlled_response(
+            intent="clarify_need",
+            slots={},
+            missing_slots=[],
+            tool_name=None,
+            tool_result=None,
+            rag_results=[],
+            auto_execute_tool=False,
+            runtime_mode="speak",
+            target_script="arabizi",
+        )
+
+        self.assertIsNotNone(response)
+        assert response is not None
+        self.assertIn("suivi commande", response.lower())
+        self.assertNotIn("num client", response.lower())
+
+    def test_garbage_response_flags_prompt_leak(self) -> None:
+        leaked = """score=0.2611; agence=Ariana\n[context]\nnum_client=3310\n[agent]\nChenna 9olli tawa"""
+        self.assertTrue(_is_garbage_response(leaked))
 
 
 if __name__ == "__main__":

@@ -1,0 +1,46 @@
+# NOTE: Unsloth was requested, but Axolotl's documented Unsloth support does not cover the detected Qwen checkpoint lineage.
+# The runtime config therefore stays on the T4-safe QLoRA path so launch remains reliable.
+base_model: outputs/3_intent_slot/merged
+trust_remote_code: true
+strict: false
+seed: 42
+output_dir: outputs/4_orpo
+dataset_prepared_path: artifacts/cache/axolotl/4_orpo_prepared
+adapter: qlora
+load_in_4bit: true
+lora_r: 32
+lora_alpha: 32
+lora_dropout: 0.05
+lora_target_linear: true
+sequence_len: 1024
+micro_batch_size: 1
+gradient_accumulation_steps: 16
+eval_batch_size: 1
+num_epochs: 4
+resume_from_checkpoint: outputs/4_orpo/checkpoint-406
+learning_rate: 3e-6
+optimizer: paged_adamw_32bit
+lr_scheduler: cosine
+warmup_steps: 20
+max_grad_norm: 0.3
+gradient_checkpointing: true
+fp16: true
+bf16: false
+tf32: false
+sdp_attention: true
+use_tensorboard: true
+logging_steps: 10
+eval_strategy: epoch
+save_strategy: epoch
+save_total_limit: 2
+chat_template: tokenizer_default
+rl: orpo
+orpo_alpha: 0.1
+remove_unused_columns: false
+datasets:
+  - path: data/processed/orpo_train.jsonl
+    ds_type: json
+    data_files:
+      - data/processed/orpo_train.jsonl
+    split: train
+    type: chat_template.argilla

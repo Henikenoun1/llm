@@ -35,22 +35,27 @@ SERVE_AFTER="${SERVE_AFTER:-1}"
 API_HOST="${CALL_CENTER_API_HOST:-0.0.0.0}"
 API_PORT="${CALL_CENTER_API_PORT:-8000}"
 
-echo "[vm_full_prod] Starting PostgreSQL and Adminer with Docker..."
-docker compose up -d postgres adminer
+if command -v docker >/dev/null 2>&1 && docker info >/dev/null 2>&1; then
+  echo "[vm_full_prod] Starting PostgreSQL and Adminer with Docker..."
+  docker compose up -d postgres adminer
 
-echo "[vm_full_prod] Waiting for PostgreSQL healthcheck..."
-READY=0
-for _ in $(seq 1 40); do
-  if docker compose exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
-    READY=1
-    break
+  echo "[vm_full_prod] Waiting for PostgreSQL healthcheck..."
+  READY=0
+  for _ in $(seq 1 40); do
+    if docker compose exec -T postgres pg_isready -U "$POSTGRES_USER" -d "$POSTGRES_DB" >/dev/null 2>&1; then
+      READY=1
+      break
+    fi
+    sleep 2
+  done
+
+  if [[ "$READY" -ne 1 ]]; then
+    echo "[vm_full_prod] PostgreSQL did not become healthy in time."
+    exit 1
   fi
-  sleep 2
-done
-
-if [[ "$READY" -ne 1 ]]; then
-  echo "[vm_full_prod] PostgreSQL did not become healthy in time."
-  exit 1
+else
+  echo "[vm_full_prod] Docker unavailable or not permitted. Falling back to local PostgreSQL bootstrap."
+  bash scripts/start_local_postgres.sh
 fi
 
 echo "[vm_full_prod] Running pipeline stage '$PIPELINE_STAGE'..."

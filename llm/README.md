@@ -72,6 +72,9 @@ python run_pipeline.py --stage audit
 # Prepare all training data
 python run_pipeline.py --stage prepare
 
+# Build persisted RAG artifacts (chunks + embeddings + FAISS/matrix)
+python run_pipeline.py --stage rag
+
 # Validate domain/tools/slots/data coherence
 python run_pipeline.py --stage validate
 
@@ -109,7 +112,7 @@ Strict run-from-zero recipe (recommended before production cut):
 python run_pipeline.py --stage full --clean-before-run --reset-processed --fail-on-no-go
 ```
 
-This command now executes: download -> audit -> prepare -> self-sup -> sft -> dpo -> promote -> eval -> validate.
+This command now executes: download -> audit -> prepare -> rag -> self-sup -> sft -> dpo -> promote -> eval -> validate.
 
 To auto-serve after a successful full run:
 
@@ -127,15 +130,16 @@ python run_pipeline.py --stage validate
 python run_pipeline.py --stage download
 python run_pipeline.py --stage audit
 python run_pipeline.py --stage prepare
+python run_pipeline.py --stage rag
 
 # SSF / self-supervised language adaptation (darja + code-switch + arabizi)
-python run_pipeline.py --stage self-sup --self-sup-epochs 2 --self-sup-max-steps 1800 --self-sup-max-seq-len 1024 --self-sup-fresh-adapter
+python run_pipeline.py --stage self-sup --self-sup-epochs 3 --self-sup-max-steps 1800 --self-sup-max-seq-len 1024 --self-sup-fresh-adapter
 
 # SFT dialogue adaptation (multi-turn + business behavior)
-python run_pipeline.py --stage sft --sft-epochs 3 --sft-max-steps 2400 --sft-max-seq-len 1536
+python run_pipeline.py --stage sft --sft-epochs 5 --sft-max-steps 2400 --sft-max-seq-len 1536
 
 # DPO alignment (safe, non-aggressive)
-python run_pipeline.py --stage dpo --dpo-epochs 1 --dpo-max-steps 600 --dpo-beta 0.1
+python run_pipeline.py --stage dpo --dpo-epochs 2 --dpo-max-steps 600 --dpo-beta 0.1
 
 python run_pipeline.py --stage promote --prod-source-variant dpo
 python run_pipeline.py --stage eval --eval-model-variant prod --eval-runtime-mode autonomous
@@ -143,6 +147,77 @@ python run_pipeline.py --stage validate
 ```
 
 Default training profile in config is tuned for T4 16GB with non-aggressive LoRA and best-checkpoint retention.
+
+## Axolotl Auto Pipeline
+
+Single-command launcher:
+
+```bash
+./lancer
+```
+
+This launcher does:
+
+- refresh dataset assets with `scripts/prepare_axolotl_pipeline.py`
+- build a dedicated `intent_slot` dataset from intents config, dialogues, and official RAG context
+- validate the 4 generated Axolotl configs before every training phase
+- SSF training with `configs/1_ssf.yaml`
+- LoRA merge of phase 1 into `outputs/1_ssf/merged`
+- SFT training with `configs/2_sft.yaml`
+- LoRA merge of phase 2 into `outputs/2_sft/merged`
+- intent/slot extraction training with `configs/3_intent_slot.yaml`
+- LoRA merge of phase 3 into `outputs/3_intent_slot/merged`
+- ORPO training with `configs/4_orpo.yaml`
+
+Important notes:
+
+- No absolute paths are used in the generated configs or launcher.
+- The launcher rewrites downstream configs between stages so they always point to the latest relative merged outputs.
+- Axolotl `0.16.1` does not expose a standalone `axolotl validate` command in the CLI; this repo uses `scripts/prepare_axolotl_pipeline.py --mode validate` which loads the 4 YAMLs through Axolotl's config loader before launch.
+
+### Logs
+
+Main places to watch:
+
+- `reports/run.log`
+- `reports/intent_slot_data_prep.json`
+- `artifacts/manifests/axolotl_pipeline_state.json`
+- `outputs/1_ssf/`
+- `outputs/2_sft/`
+- `outputs/3_intent_slot/`
+- `outputs/4_orpo/`
+
+### TensorBoard
+
+If tensorboard is installed in the active environment:
+
+```bash
+tensorboard --logdir outputs --port 6006
+```
+
+Then open `http://127.0.0.1:6006`.
+
+### Quick Eval With 5 Tunisian Prompts
+
+You can probe the dedicated extractor stage with:
+
+```bash
+axolotl inference configs/3_intent_slot.yaml --lora-model-dir outputs/3_intent_slot
+```
+
+Suggested extraction prompts:
+
+- `bonjour 5007 نحب نعرف وين واصلة commande 70007`
+- `tnajem tconfirmili code verre 25YXSU ?`
+- `planning livraison agence ben arous secteur mourouj, prochain creneau ?`
+- `bonjour 3310 nheb na3di commande progressive 1.67 crizal prevencia diametre 70`
+- `aslema, dispo 25YXSU orma sun diametre 65 ?`
+
+To probe the final ORPO adapter:
+
+```bash
+axolotl inference configs/4_orpo.yaml --lora-model-dir outputs/4_orpo
+```
 
 ### External SSF Enrichment (104k)
 
@@ -236,7 +311,7 @@ python run_pipeline.py --stage promote --prod-source-variant dpo
 ## Docker / Database
 
 ```bash
-copy .env.example .env
+cp .env.example .env
 docker compose up -d
 ```
 
@@ -244,6 +319,12 @@ Then set:
 
 ```bash
 CALL_CENTER_DATABASE_URL=postgresql+psycopg://callcenter:callcenter@localhost:5432/callcenter
+```
+
+If Docker is unavailable or permission to the Docker socket is denied, bootstrap a local PostgreSQL instance in the repo workspace:
+
+```bash
+bash scripts/start_local_postgres.sh
 ```
 
 ### VM One-Command Bootstrap (DB + Training + Promote + Serve)
@@ -262,7 +343,7 @@ powershell -ExecutionPolicy Bypass -File scripts/vm_full_prod.ps1
 
 The bootstrap scripts do the following:
 
-- start PostgreSQL/Adminer with Docker
+- start PostgreSQL/Adminer with Docker, or fall back to `scripts/start_local_postgres.sh`
 - run `run_pipeline.py --stage full --fail-on-no-go`
 - launch API server in production mode
 

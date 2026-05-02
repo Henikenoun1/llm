@@ -201,6 +201,36 @@ def _default_stage_max_seq_len(stage_name: str) -> int:
     return defaults.get(stage_name, CFG.max_seq_len)
 
 
+def _prune_checkpoint_dir(checkpoint_dir: Path, keep_checkpoint: str | None) -> None:
+    keep_path = Path(keep_checkpoint).resolve() if keep_checkpoint else None
+    if not checkpoint_dir.exists():
+        return
+    for child in checkpoint_dir.iterdir():
+        if not child.is_dir():
+            continue
+        if not child.name.startswith("checkpoint-"):
+            continue
+        if keep_path is not None and child.resolve() == keep_path:
+            continue
+        shutil.rmtree(child, ignore_errors=True)
+
+
+def _save_best_model_artifacts(
+    *,
+    trainer: Any,
+    tokenizer: Any,
+    output_dir: Path,
+    checkpoint_dir: Path,
+) -> str | None:
+    output_dir.mkdir(parents=True, exist_ok=True)
+    trainer.model.save_pretrained(str(output_dir))
+    tokenizer.save_pretrained(str(output_dir))
+
+    best_checkpoint = getattr(trainer.state, "best_model_checkpoint", None)
+    _prune_checkpoint_dir(checkpoint_dir, best_checkpoint)
+    return str(best_checkpoint) if best_checkpoint else None
+
+
 def _run_sft_stage(
     *,
     stage_name: str,
@@ -267,6 +297,7 @@ def _run_sft_stage(
         metric_for_best_model="eval_loss" if val_ds else None,
         greater_is_better=False if val_ds else None,
         save_total_limit=CFG.save_total_limit,
+        save_only_model=True,
         optim=CFG.optim,
         lr_scheduler_type=CFG.lr_scheduler_type,
         max_grad_norm=CFG.max_grad_norm,
@@ -301,9 +332,12 @@ def _run_sft_stage(
             _safe_perplexity(row.get("eval_loss")),
         )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    trainer.save_model(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    best_checkpoint = _save_best_model_artifacts(
+        trainer=trainer,
+        tokenizer=tokenizer,
+        output_dir=output_dir,
+        checkpoint_dir=checkpoint_dir,
+    )
 
     metrics = dict(getattr(result, "metrics", {}) or {})
     metrics.update(
@@ -319,7 +353,7 @@ def _run_sft_stage(
             "continued_from_adapter": bool(adapter_init_dir and (adapter_init_dir / "adapter_config.json").exists()),
             "adapter_init_dir": str(adapter_init_dir) if adapter_init_dir else None,
             "output_dir": str(output_dir),
-            "best_model_checkpoint": trainer.state.best_model_checkpoint,
+            "best_model_checkpoint": best_checkpoint,
             "diagnostics": diagnostics,
         }
     )
@@ -467,6 +501,7 @@ def train_dpo(
         metric_for_best_model="eval_loss" if val_ds else None,
         greater_is_better=False if val_ds else None,
         save_total_limit=CFG.save_total_limit,
+        save_only_model=True,
         optim=CFG.optim,
         lr_scheduler_type=CFG.lr_scheduler_type,
         max_grad_norm=CFG.max_grad_norm,
@@ -500,9 +535,12 @@ def train_dpo(
             _safe_perplexity(row.get("eval_loss")),
         )
 
-    output_dir.mkdir(parents=True, exist_ok=True)
-    trainer.save_model(str(output_dir))
-    tokenizer.save_pretrained(str(output_dir))
+    best_checkpoint = _save_best_model_artifacts(
+        trainer=trainer,
+        tokenizer=tokenizer,
+        output_dir=output_dir,
+        checkpoint_dir=CHECKPOINTS_DIR / "dpo",
+    )
 
     metrics = dict(getattr(result, "metrics", {}) or {})
     metrics.update(
@@ -517,7 +555,7 @@ def train_dpo(
             "eval_examples": len(val_ds) if val_ds else 0,
             "adapter_init_dir": str(sft_adapter_dir) if sft_adapter_dir else None,
             "output_dir": str(output_dir),
-            "best_model_checkpoint": trainer.state.best_model_checkpoint,
+            "best_model_checkpoint": best_checkpoint,
             "diagnostics": diagnostics,
         }
     )
@@ -535,11 +573,30 @@ def train_dpo(
 
 
 def promote_adapter(source_variant: str = "dpo", destination_stage: str = "production") -> dict[str, Any]:
+    destination = CFG.adapter_dir_for_stage(destination_stage)
+
+    if source_variant == "base":
+        if destination.exists():
+            shutil.rmtree(destination)
+        destination.mkdir(parents=True, exist_ok=True)
+        result = {
+            "source": "base_model",
+            "source_variant": "base",
+            "base_model": CFG.base_model,
+            "destination": str(destination),
+            "adapter_present": False,
+        }
+        (ADAPTERS_DIR / "active_production.json").write_text(
+            json.dumps(result, indent=2),
+            encoding="utf-8",
+        )
+        logger.warning("Promoted base model without adapter for production marker setup.")
+        return result
+
     source_dir = CFG.resolve_adapter_dir(source_variant)
     if source_dir is None:
         raise FileNotFoundError(f"No adapter found for variant '{source_variant}'")
 
-    destination = CFG.adapter_dir_for_stage(destination_stage)
     if destination.exists():
         shutil.rmtree(destination)
     shutil.copytree(source_dir, destination)
@@ -551,4 +608,3 @@ def promote_adapter(source_variant: str = "dpo", destination_stage: str = "produ
     )
     logger.info("Promoted adapter %s -> %s", source_dir, destination)
     return result
-

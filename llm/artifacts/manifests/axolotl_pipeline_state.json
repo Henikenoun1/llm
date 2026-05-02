@@ -1,0 +1,47 @@
+{
+  "mode": "after-intent-slot",
+  "latest_checkpoint": "outputs/3_intent_slot/checkpoint-750",
+  "base_model": "outputs/2_sft/merged",
+  "configs": {
+    "phase1_config": "configs/1_ssf.yaml",
+    "phase2_config": "configs/2_sft.yaml",
+    "phase3_config": "configs/3_intent_slot.yaml",
+    "phase4_config": "configs/4_orpo.yaml",
+    "phase2_base_model": "outputs/1_ssf/merged",
+    "phase3_base_model": "outputs/2_sft/merged",
+    "phase4_base_model": "outputs/3_intent_slot/merged",
+    "phase1_lora_settings": {
+      "lora_r": 32,
+      "lora_alpha": 32,
+      "lora_dropout": 0.05
+    }
+  },
+  "validation": {
+    "configs": [
+      {
+        "config": "configs/1_ssf.yaml",
+        "status": "ok",
+        "base_model": "outputs/2_sft/merged",
+        "output_dir": "outputs/1_ssf"
+      },
+      {
+        "config": "configs/2_sft.yaml",
+        "status": "ok",
+        "base_model": "outputs/1_ssf/merged",
+        "output_dir": "outputs/2_sft"
+      },
+      {
+        "config": "configs/3_intent_slot.yaml",
+        "status": "ok",
+        "base_model": "outputs/2_sft/merged",
+        "output_dir": "outputs/3_intent_slot"
+      },
+      {
+        "config": "configs/4_orpo.yaml",
+        "status": "ok",
+        "base_model": "outputs/3_intent_slot/merged",
+        "output_dir": "outputs/4_orpo"
+      }
+    ]
+  }
+}

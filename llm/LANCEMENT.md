@@ -17,9 +17,10 @@ python run_pipeline.py --stage validate
 python run_pipeline.py --stage download
 python run_pipeline.py --stage audit
 python run_pipeline.py --stage prepare
-python run_pipeline.py --stage self-sup --self-sup-epochs 2 --self-sup-max-steps 1800 --self-sup-max-seq-len 1024 --self-sup-fresh-adapter
-python run_pipeline.py --stage sft --sft-epochs 3 --sft-max-steps 2400 --sft-max-seq-len 1536
-python run_pipeline.py --stage dpo --dpo-epochs 1 --dpo-max-steps 600 --dpo-beta 0.1
+python run_pipeline.py --stage rag
+python run_pipeline.py --stage self-sup --self-sup-epochs 3 --self-sup-max-steps 1800 --self-sup-max-seq-len 1024 --self-sup-fresh-adapter
+python run_pipeline.py --stage sft --sft-epochs 5 --sft-max-steps 2400 --sft-max-seq-len 1536
+python run_pipeline.py --stage dpo --dpo-epochs 2 --dpo-max-steps 600 --dpo-beta 0.1
 python run_pipeline.py --stage promote --prod-source-variant dpo
 python run_pipeline.py --stage eval --eval-model-variant prod --eval-runtime-mode autonomous
 python run_pipeline.py --stage validate
@@ -64,10 +65,10 @@ npm start
 - `POST /rating`
 - `POST /admin/corrections`
 
-## 6. Docker + base de donnees
+## 6. Base de donnees
 
 ```bash
-copy .env.example .env
+cp .env.example .env
 docker compose up -d
 ```
 
@@ -75,6 +76,12 @@ Puis definir:
 
 ```bash
 CALL_CENTER_DATABASE_URL=postgresql+psycopg://callcenter:callcenter@localhost:5432/callcenter
+```
+
+Sans Docker ou sans permission sur le socket Docker:
+
+```bash
+bash scripts/start_local_postgres.sh
 ```
 
 ## 7. Bootstrap VM en une commande

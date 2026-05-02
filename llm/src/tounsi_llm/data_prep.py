@@ -10,16 +10,19 @@ from __future__ import annotations
 import json
 import random
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from .config import (
+    CFG,
     CONFIG_DIR,
     DOMAIN_CFG,
     FEW_SHOTS_CFG,
     HISTORY_DIR,
     PROCESSED_DATA_DIR,
     RAW_DATA_DIR,
+    REPORTS_DIR,
     SEED,
     logger,
     resolve_project_path,
@@ -56,8 +59,11 @@ FUSHA_MARKERS = [
 MOROCCAN_MARKERS = [
     "ديال",
     "ديالي",
+    "ديالك",
+    "ديالكم",
     "كاين",
     "كاينة",
+    "كاينين",
     "مزيان",
     "دابا",
     "فاش",
@@ -65,6 +71,10 @@ MOROCCAN_MARKERS = [
     "بزاف",
     "هادا",
     "هادي",
+    "هادشي",
+    "عافاك",
+    "غادي",
+    "حيت",
 ]
 
 TOUNSI_MARKERS = [
@@ -82,6 +92,29 @@ TOUNSI_MARKERS = [
     "عسلامة",
     "يعيشك",
 ]
+
+_TOXIC_MARKERS = {
+    "سبان",
+    "سب",
+    "إرهاب",
+    "ارهاب",
+    "حقير",
+    "حيوان",
+    "نكره",
+    "نكرهو",
+    "meskhou",
+    "msakh",
+    "terror",
+    "terrorist",
+    "hate",
+    "raciste",
+    "racism",
+}
+_TOXIC_MARKERS = {
+    normalize_for_dedup(marker)
+    for marker in _TOXIC_MARKERS
+    if normalize_for_dedup(marker)
+}
 
 _CHINESE_RE = re.compile(r"[\u4e00-\u9fff\u3400-\u4dbf]")
 
@@ -114,6 +147,159 @@ _KNOWN_SYSTEM_PROMPTS = {
     SYSTEM_GENERAL,
     str(DOMAIN_CFG.get("humanized_prompt", "")).strip(),
 }
+_DOMAIN_REQUIRED_SOURCES = {
+    "commandes_intents",
+    "commandes_augmented",
+    "multiturn_collection",
+    "slot_bootstrap",
+    "rag_grounded",
+    "few_shots",
+    "approved_learning",
+}
+_DOMAIN_REQUIRED_SOURCES |= {
+    str(item).strip()
+    for item in DOMAIN_CFG.get("sft_domain_bypass_sources", [])
+    if str(item).strip()
+}
+_SFT_RELAXED_STYLE_SOURCES = {
+    str(item).strip()
+    for item in DOMAIN_CFG.get("sft_relaxed_style_sources", [])
+    if str(item).strip()
+}
+_SFT_NO_FILTER_SOURCES = {
+    str(item).strip()
+    for item in DOMAIN_CFG.get("sft_no_filter_sources", [])
+    if str(item).strip()
+}
+_DOMAIN_STRONG_MARKERS = {
+    "commande",
+    "كوموند",
+    "suivi",
+    "statut",
+    "num client",
+    "code client",
+    "dossier",
+    "livraison",
+    "agence",
+    "secteur",
+    "creneau",
+    "créneau",
+    "reference",
+    "référence",
+    "catalogue",
+    "catalog",
+    "verre",
+    "lens",
+    "stock",
+    "dispo",
+    "disponibilite",
+    "availability",
+    "fabrication",
+    "opticien",
+    "optique",
+    "varilux",
+    "crizal",
+    "prevencia",
+    "stellest",
+    "eyezen",
+    "bifocal",
+    "sphere",
+    "sphère",
+    "cyl",
+    "cylindre",
+    "axe",
+    "addition",
+    "diametre",
+    "diamètre",
+}
+_DOMAIN_WEAK_MARKERS = {"client", "prix", "سوم", "product", "produit", "patient", "rdv", "rendez vous"}
+_GENERIC_QUERY_MARKERS = {
+    "قداش",
+    "شنوة",
+    "وقتاش",
+    "وين",
+    "نحب",
+    "نجم",
+    "سلام",
+    "عسلامة",
+    "مرحبا",
+    "bonjour",
+    "hello",
+    "allo",
+}
+_NORMALIZED_GENERIC_QUERY_MARKERS = {
+    normalize_for_dedup(marker)
+    for marker in _GENERIC_QUERY_MARKERS
+    if normalize_for_dedup(marker)
+}
+for item in DOMAIN_CFG.get("business_keywords", []):
+    marker = normalize_for_dedup(str(item))
+    if marker:
+        _DOMAIN_STRONG_MARKERS.add(marker)
+for intent_name, values in DOMAIN_CFG.get("intent_keywords", {}).items():
+    if canonicalize_intent(intent_name) in {"greeting", "thanks"}:
+        continue
+    if not isinstance(values, list):
+        continue
+    for item in values:
+        marker = normalize_for_dedup(str(item))
+        if marker:
+            if marker in _NORMALIZED_GENERIC_QUERY_MARKERS:
+                continue
+            if marker in {"client", "prix", "سوم", "price", "product", "produit"}:
+                _DOMAIN_WEAK_MARKERS.add(marker)
+            else:
+                _DOMAIN_STRONG_MARKERS.add(marker)
+_DOMAIN_STRONG_MARKERS = {normalize_for_dedup(marker) for marker in _DOMAIN_STRONG_MARKERS if normalize_for_dedup(marker)}
+_DOMAIN_WEAK_MARKERS = {normalize_for_dedup(marker) for marker in _DOMAIN_WEAK_MARKERS if normalize_for_dedup(marker)}
+_DOMAIN_STRONG_MARKERS -= _NORMALIZED_GENERIC_QUERY_MARKERS
+_DOMAIN_WEAK_MARKERS -= _NORMALIZED_GENERIC_QUERY_MARKERS
+_STRICT_DPO_DOMAIN_MARKERS = {
+    "commande",
+    "كوموند",
+    "suivi",
+    "statut",
+    "livraison",
+    "agence",
+    "secteur",
+    "creneau",
+    "créneau",
+    "reference",
+    "référence",
+    "catalog",
+    "catalogue",
+    "verre",
+    "lens",
+    "stock",
+    "dispo",
+    "disponibilite",
+    "availability",
+    "fabrication",
+    "opticien",
+    "optique",
+    "varilux",
+    "crizal",
+    "prevencia",
+    "stellest",
+    "eyezen",
+    "bifocal",
+    "sphere",
+    "sphère",
+    "cyl",
+    "cylindre",
+    "axe",
+    "addition",
+    "diametre",
+    "diamètre",
+    "illico",
+    "anti reflet",
+    "anti-reflet",
+    "progressive",
+    "precal",
+    "mineral",
+    "minéral",
+    "orma",
+}
 MEMORY_CFG = DOMAIN_CFG.get("memory", {})
 APPROVED_LEARNING_PATH = resolve_project_path(
     MEMORY_CFG.get("learning_buffer_path", HISTORY_DIR / "learning_buffer.jsonl")
@@ -123,11 +309,39 @@ APPROVED_FEEDBACK_DPO_PATH = resolve_project_path(
 )
 COMMANDES_INTENTS_PATH = CONFIG_DIR / "commandes_intents.jsonl"
 _NUM_CLIENT_TOKEN_RE = re.compile(r"\b(?:CLI|CLT|CLIENT|CUST)[-_]?\s*0*\d{3,6}\b", re.IGNORECASE)
+_OPTION_MARKER_RE = re.compile(r"\b[A-D]\.\s")
+_ORDER_ID_RE = re.compile(r"\bCMD[-_ ]?\d{4,}\b", re.IGNORECASE)
+_CLIENT_REFERENCE_RE = re.compile(
+    r"\b(?:num[_ ]?client|code[_ ]?client|client|cli|clt|cust)[-_ ]?\s*0*\d{3,6}\b",
+    re.IGNORECASE,
+)
+_OPTICS_MARKER_RE = re.compile(
+    r"\b(?:od|og|sphere|sphère|cyl|cylindre|axe|addition|diam[eè]tre)\b",
+    re.IGNORECASE,
+)
 
-_AUGMENTED_INTENT_CACHE: list[list[dict[str, str]]] | None = None
-_SLOT_BOOTSTRAP_CACHE: list[list[dict[str, str]]] | None = None
-_RAG_GROUNDED_CACHE: list[list[dict[str, str]]] | None = None
+_AUGMENTED_INTENT_CACHE: dict[int, list[list[dict[str, str]]]] = {}
+_SLOT_BOOTSTRAP_CACHE: dict[int, list[list[dict[str, str]]]] = {}
+_RAG_GROUNDED_CACHE: dict[tuple[int, int], list[list[dict[str, str]]]] = {}
 _RAG_SELF_SUP_CACHE: list[str] | None = None
+
+_INSTRUCTIONAL_NOISE_PATTERNS = [
+    "ترجم",
+    "translate this to",
+    "translate to tunisian arabic",
+    "متعدد الخيارات",
+    "قرا هاذا النص",
+    "انطلاقا من",
+    "على حساب الإحصاء",
+    "الجواب:",
+    "هذا المقال",
+    "يمكنك",
+    "أيضاً",
+    "تماماً",
+    "سنطرق",
+    "ما هو موقع",
+]
+_ROLE_PREFIX_PATTERNS = ["System:", "User:", "Assistant:"]
 
 
 def _contains_code_switch_business_terms(text: str) -> bool:
@@ -167,7 +381,47 @@ def _contains_code_switch_business_terms(text: str) -> bool:
     return False
 
 
+def _domain_signal_score(text: str) -> int:
+    normalized = normalize_for_dedup(text)
+    if not normalized:
+        return 0
+
+    score = 0
+    if _ORDER_ID_RE.search(text):
+        score += 3
+    if _NUM_CLIENT_TOKEN_RE.search(text) or _CLIENT_REFERENCE_RE.search(text):
+        score += 2
+    if _OPTICS_MARKER_RE.search(text):
+        score += 2
+    if "sivo" in normalized or "essilor" in normalized:
+        score += 2
+
+    for marker in _DOMAIN_STRONG_MARKERS:
+        if marker and marker in normalized:
+            score += 2
+    for marker in _DOMAIN_WEAK_MARKERS:
+        if marker and marker in normalized:
+            score += 1
+    return score
+
+
+def conversation_domain_ok(messages: list[dict[str, str]], source: str = "unknown") -> bool:
+    if source in _DOMAIN_REQUIRED_SOURCES:
+        return True
+
+    joined = " ".join(
+        normalize_text(message.get("content", ""))
+        for message in normalize_messages(messages)
+        if message.get("role") in {"user", "assistant"}
+    )
+    return _domain_signal_score(joined) >= 2
+
+
 def _self_sup_language_ok(text: str, *, strict_tunisian: bool) -> bool:
+    if _contains_toxic_or_abusive_content(text):
+        return False
+    if _contains_instructional_noise(text):
+        return False
     if strict_tunisian:
         return looks_tunisian(text, strict=True)
 
@@ -180,6 +434,28 @@ def _self_sup_language_ok(text: str, *, strict_tunisian: bool) -> bool:
     if script == "latin" and _contains_code_switch_business_terms(text):
         return True
     return False
+
+
+def _contains_instructional_noise(text: str) -> bool:
+    normalized = normalize_text(text)
+    if not normalized:
+        return False
+    lowered = normalized.lower()
+    if any(pattern in lowered for pattern in _INSTRUCTIONAL_NOISE_PATTERNS):
+        return True
+    if any(lowered.startswith(pattern.lower()) for pattern in _ROLE_PREFIX_PATTERNS):
+        return True
+    return bool(_OPTION_MARKER_RE.search(normalized))
+
+
+def _contains_toxic_or_abusive_content(text: str) -> bool:
+    if not CFG.block_toxic_content:
+        return False
+
+    normalized = normalize_for_dedup(text)
+    if not normalized:
+        return False
+    return any(marker in normalized for marker in _TOXIC_MARKERS)
 
 
 def _load_commandes_intent_conversations(path: Path = COMMANDES_INTENTS_PATH) -> list[list[dict[str, str]]]:
@@ -327,10 +603,14 @@ def _optics_phrase(slots: dict[str, Any]) -> str:
     return " | ".join(parts) if parts else "OD sphere -0.50 cyl +1.00 axe 90"
 
 
-def _build_augmented_intent_conversations(path: Path = COMMANDES_INTENTS_PATH, variants_per_row: int = 2) -> list[list[dict[str, str]]]:
-    global _AUGMENTED_INTENT_CACHE
-    if _AUGMENTED_INTENT_CACHE is not None:
-        return list(_AUGMENTED_INTENT_CACHE)
+def _build_augmented_intent_conversations(
+    path: Path = COMMANDES_INTENTS_PATH,
+    variants_per_row: int | None = None,
+) -> list[list[dict[str, str]]]:
+    effective_variants = max(1, int(variants_per_row or CFG.sft_augmented_variants_per_row))
+    cached = _AUGMENTED_INTENT_CACHE.get(effective_variants)
+    if cached is not None:
+        return list(cached)
 
     intent_templates: dict[str, dict[str, list[str]]] = {
         "order_tracking": {
@@ -449,7 +729,7 @@ def _build_augmented_intent_conversations(path: Path = COMMANDES_INTENTS_PATH, v
             "optics": optics,
         }
 
-        max_variants = min(variants_per_row, len(template_bank["user"]), len(template_bank["assistant"]))
+        max_variants = min(effective_variants, len(template_bank["user"]), len(template_bank["assistant"]))
         for offset in range(max_variants):
             user_template = template_bank["user"][(index + offset) % len(template_bank["user"])]
             assistant_template = template_bank["assistant"][(index + offset) % len(template_bank["assistant"])]
@@ -470,15 +750,16 @@ def _build_augmented_intent_conversations(path: Path = COMMANDES_INTENTS_PATH, v
                 )
             )
 
-    logger.info("Built %d augmented intent conversations", len(conversations))
-    _AUGMENTED_INTENT_CACHE = conversations
+    logger.info("Built %d augmented intent conversations (variants_per_row=%d)", len(conversations), effective_variants)
+    _AUGMENTED_INTENT_CACHE[effective_variants] = conversations
     return list(conversations)
 
 
-def _generate_slot_rich_bootstrap_conversations(limit: int = 220) -> list[list[dict[str, str]]]:
-    global _SLOT_BOOTSTRAP_CACHE
-    if _SLOT_BOOTSTRAP_CACHE is not None:
-        return list(_SLOT_BOOTSTRAP_CACHE)
+def _generate_slot_rich_bootstrap_conversations(limit: int | None = None) -> list[list[dict[str, str]]]:
+    effective_limit = max(1, int(limit or CFG.sft_slot_bootstrap_limit))
+    cached = _SLOT_BOOTSTRAP_CACHE.get(effective_limit)
+    if cached is not None:
+        return list(cached)
 
     clients = ["2250", "2868", "3144", "4022", "4771", "5206", "5931", "6088", "7310", "8442", "9055"]
     orders = ["CMD2612345678", "CMD2623456789", "CMD2634567890", "CMD2645678901", "CMD2656789012"]
@@ -494,7 +775,7 @@ def _generate_slot_rich_bootstrap_conversations(limit: int = 220) -> list[list[d
     conversations: list[list[dict[str, str]]] = []
     seen: set[str] = set()
 
-    for idx in range(limit):
+    for idx in range(effective_limit):
         num_client = clients[idx % len(clients)]
         order_id = orders[idx % len(orders)]
         product = products[idx % len(products)]
@@ -554,8 +835,8 @@ def _generate_slot_rich_bootstrap_conversations(limit: int = 220) -> list[list[d
             )
         )
 
-    logger.info("Built %d slot bootstrap conversations", len(conversations))
-    _SLOT_BOOTSTRAP_CACHE = conversations
+    logger.info("Built %d slot bootstrap conversations (limit=%d)", len(conversations), effective_limit)
+    _SLOT_BOOTSTRAP_CACHE[effective_limit] = conversations
     return list(conversations)
 
 
@@ -566,18 +847,21 @@ def _simplify_rag_material(value: str) -> str:
 
 
 def _build_rag_grounded_conversations(
-    max_delivery: int = 90,
-    max_lens: int = 220,
+    max_delivery: int | None = None,
+    max_lens: int | None = None,
 ) -> list[list[dict[str, str]]]:
-    global _RAG_GROUNDED_CACHE
-    if _RAG_GROUNDED_CACHE is not None:
-        return list(_RAG_GROUNDED_CACHE)
+    effective_delivery = max(1, int(max_delivery or CFG.sft_rag_delivery_limit))
+    effective_lens = max(1, int(max_lens or CFG.sft_rag_lens_limit))
+    cache_key = (effective_delivery, effective_lens)
+    cached = _RAG_GROUNDED_CACHE.get(cache_key)
+    if cached is not None:
+        return list(cached)
 
     conversations: list[list[dict[str, str]]] = []
     seen: set[str] = set()
 
     delivery_entries = [entry for entry in load_delivery_rag_entries() if entry.get("secteur")]
-    for index, entry in enumerate(delivery_entries[:max_delivery]):
+    for index, entry in enumerate(delivery_entries[:effective_delivery]):
         agence = str(entry.get("agence", "")).strip()
         secteur = str(entry.get("secteur", "")).strip()
         slots = [str(item).strip() for item in entry.get("tous_creneaux", []) if str(item).strip()]
@@ -617,7 +901,7 @@ def _build_rag_grounded_conversations(
             )
 
     lens_entries = [entry for entry in load_lens_rag_entries() if entry.get("code") and entry.get("name")]
-    for entry in lens_entries[:max_lens]:
+    for entry in lens_entries[:effective_lens]:
         code = str(entry.get("code", "")).strip().upper()
         name = str(entry.get("name", "")).strip()
         material = _simplify_rag_material(str(entry.get("material", ""))) or "Orma"
@@ -655,8 +939,13 @@ def _build_rag_grounded_conversations(
                 )
             )
 
-    logger.info("Built %d RAG-grounded conversations", len(conversations))
-    _RAG_GROUNDED_CACHE = conversations
+    logger.info(
+        "Built %d RAG-grounded conversations (delivery=%d, lens=%d)",
+        len(conversations),
+        effective_delivery,
+        effective_lens,
+    )
+    _RAG_GROUNDED_CACHE[cache_key] = conversations
     return list(conversations)
 
 
@@ -817,6 +1106,8 @@ def is_clean_tounsi(text: str, max_fusha: int = 1) -> bool:
         return False
     if _CHINESE_RE.search(text):
         return False
+    if _contains_instructional_noise(text):
+        return False
     if sum(1 for marker in FUSHA_MARKERS if marker in text) >= max_fusha:
         return False
     if is_moroccan_or_algerian(text):
@@ -959,15 +1250,21 @@ def _conversation_weight(source: str) -> int:
     return weights.get(source, 2)
 
 
-def _assistant_style_ok(text: str) -> bool:
+def _assistant_style_ok(text: str, *, allow_relaxed_tunisian: bool = False) -> bool:
     cleaned = normalize_text(text)
     if len(cleaned.strip()) < 8:
         return False
     if _CHINESE_RE.search(cleaned):
         return False
+    if _contains_toxic_or_abusive_content(cleaned):
+        return False
+    if _contains_instructional_noise(cleaned):
+        return False
     if is_moroccan_or_algerian(cleaned):
         return False
-    if looks_tunisian(cleaned, strict=False):
+    if is_clean_tounsi(cleaned, max_fusha=2):
+        return True
+    if allow_relaxed_tunisian and looks_tunisian(cleaned, strict=False):
         return True
     script = detect_script(cleaned)
     if script in {"mixed", "arabizi"}:
@@ -975,6 +1272,188 @@ def _assistant_style_ok(text: str) -> bool:
     if script == "latin" and _contains_code_switch_business_terms(cleaned):
         return True
     return False
+
+
+def _user_style_ok(text: str) -> bool:
+    cleaned = normalize_text(text)
+    if len(cleaned.strip()) < 2:
+        return True
+    if _contains_toxic_or_abusive_content(cleaned):
+        return False
+    if _contains_instructional_noise(cleaned):
+        return False
+    if is_moroccan_or_algerian(cleaned):
+        return False
+    return True
+
+
+def _dpo_pair_domain_ok(pair: dict[str, str]) -> bool:
+    prompt = normalize_text(pair.get("prompt", ""))
+    chosen = normalize_text(pair.get("chosen", ""))
+    cleaned = re.sub(r"(?im)^\s*(client|agent)\s*:\s*", "", "\n".join([prompt, chosen]))
+    normalized = normalize_for_dedup(cleaned)
+
+    score = 0
+    if _ORDER_ID_RE.search(cleaned):
+        score += 3
+    if _NUM_CLIENT_TOKEN_RE.search(cleaned):
+        score += 3
+    if re.search(r"\b(?:num[_ ]?client|code[_ ]?client)\b", cleaned, re.IGNORECASE):
+        score += 2
+    if _OPTICS_MARKER_RE.search(cleaned):
+        score += 2
+    if "sivo" in normalized or "essilor" in normalized:
+        score += 2
+    for marker in _STRICT_DPO_DOMAIN_MARKERS:
+        normalized_marker = normalize_for_dedup(marker)
+        if normalized_marker and normalized_marker in normalized:
+            score += 2
+
+    return score >= 2
+
+
+def _dpo_pair_ok(pair: dict[str, str], *, require_domain: bool = True) -> bool:
+    prompt = normalize_text(pair.get("prompt", ""))
+    chosen = normalize_text(pair.get("chosen", ""))
+    rejected = normalize_text(pair.get("rejected", ""))
+
+    if not prompt or not chosen or not rejected:
+        return False
+    if any(_contains_toxic_or_abusive_content(value) for value in [prompt, chosen, rejected]):
+        return False
+    if any(_contains_instructional_noise(value) for value in [prompt, chosen, rejected]):
+        return False
+    if is_moroccan_or_algerian(" ".join([prompt, chosen, rejected])):
+        return False
+    if require_domain and not _dpo_pair_domain_ok(pair):
+        return False
+    if not is_clean_tounsi(chosen, max_fusha=3):
+        return False
+    if not is_clean_tounsi(rejected, max_fusha=4):
+        return False
+    return True
+
+
+def _dpo_prompt_from_messages(messages: list[dict[str, str]], assistant_index: int, max_turns: int = 6) -> str:
+    role_map = {"user": "Client", "assistant": "Agent"}
+    lines: list[str] = []
+    for item in normalize_messages(messages[max(0, assistant_index - max_turns) : assistant_index]):
+        role = item.get("role")
+        content = normalize_text(item.get("content", ""))
+        if role not in role_map or not content:
+            continue
+        lines.append(f"{role_map[role]}: {content}")
+    return "\n".join(lines).strip()
+
+
+def _pick_negative_variant(reference: str, variants: list[str]) -> str:
+    if not variants:
+        return ""
+    index = sum(ord(char) for char in reference) % len(variants)
+    return variants[index]
+
+
+def _build_rejected_dpo_response(prompt: str, chosen: str) -> str:
+    normalized = normalize_for_dedup(" ".join([prompt, chosen]))
+
+    if any(marker in normalized for marker in ["livraison", "agence", "secteur", "creneau", "créneau"]):
+        return _pick_negative_variant(
+            normalized,
+            [
+                "أكيد، التسليم يمشي مباشرة للpatient نهار الاثنين 10:00 مضبوط.",
+                "مأكد 100% اللي livraison توصلك للpatient اليوم من غير ما نراجع planning.",
+                "خلاص، نعدك بوقت دقيق ونهبطوه مباشرة عند المريض.",
+            ],
+        )
+    if _OPTICS_MARKER_RE.search(prompt) or any(
+        marker in normalized
+        for marker in ["create_order", "commande", "product", "produit", "verre", "diametre", "diamètre"]
+    ):
+        return _pick_negative_variant(
+            normalized,
+            [
+                "مريقل، نبعث commande توة من غير recap للـ OD/OG ولا ما نثبت num client.",
+                "ما يلزمنا حتى تأكيد إضافي، نكمل الطلبية مباشرة حتى كان القيم ناقصة.",
+                "خلاص نعديها نهائية من غير ما نراجع sphere ولا cylindre ولا addition.",
+            ],
+        )
+    if any(marker in normalized for marker in ["reference", "référence", "catalog", "catalogue", "dispo", "stock", "availability"]):
+        return _pick_negative_variant(
+            normalized,
+            [
+                "إي نعم، الكود صحيح ومتوفر 100% من غير ما نراجع catalog ولا stock.",
+                "نأكدلك المرجع هذا أكيد صحيح وموجود توة بلا حتى تثبت.",
+                "متوفر ومثبت نهائيا، ما ثماش داعي نرجع للمصدر الرسمي.",
+            ],
+        )
+    if any(marker in normalized for marker in ["suivi", "statut", "commande", "order_id"]):
+        return _pick_negative_variant(
+            normalized,
+            [
+                "أكيد commande validée وتوصل غدوة، ما يلزمش حتى num client.",
+                "نجم نأكدلك statut exact ووقت الوصول من غير ما نثبت في السيستام.",
+                "كل شي حاضر، نعطيك وعد نهائي بالتسليم حتى من غير dossier.",
+            ],
+        )
+    if any(marker in normalized for marker in ["prix", "سوم", "tarif", "price"]):
+        return _pick_negative_variant(
+            normalized,
+            [
+                "السوم هذا ثابت ومؤكد من غير ما نراجع التسعيرة الرسمية.",
+                "نعطيك prix نهائي من عندي من غير ما نثبت في النظام.",
+                "أكيد هذا هو السعر النهائي 100% وما فماش حتى تبديل.",
+            ],
+        )
+    return _pick_negative_variant(
+        normalized,
+        [
+            "أكيد، كل شي صحيح ومؤكد 100% من غير ما نثبت في السيستام.",
+            "نجم نوعدك بإجابة نهائية حتى من غير ما نراجع المصدر.",
+            "مريقل، نعطيك confirmation كاملة من غير ما نتحقق.",
+        ],
+    )
+
+
+def _build_synthetic_dpo_pairs(raw_paths: dict[str, Path], limit: int | None = None) -> list[dict[str, str]]:
+    entries = _collapse_sft_conversation_entries(_filtered_conversations(raw_paths))
+    random.seed(SEED)
+    random.shuffle(entries)
+
+    pairs: list[dict[str, str]] = []
+    seen_pairs: set[str] = set()
+
+    for entry in entries:
+        messages = entry.get("messages", [])
+        if not conversation_domain_ok(messages, source=str(entry.get("source", "unknown"))):
+            continue
+
+        for idx, message in enumerate(normalize_messages(messages)):
+            if message.get("role") != "assistant":
+                continue
+
+            prompt = _dpo_prompt_from_messages(messages, idx)
+            chosen = normalize_text(message.get("content", ""))
+            if len(prompt) < 12 or not _assistant_style_ok(chosen):
+                continue
+
+            rejected = _build_rejected_dpo_response(prompt, chosen)
+            pair = {"prompt": prompt, "chosen": chosen, "rejected": rejected}
+            if normalize_for_dedup(chosen) == normalize_for_dedup(rejected):
+                continue
+            if not _dpo_pair_ok(pair):
+                continue
+
+            dedup_key = normalize_for_dedup(
+                f"{pair['prompt']} || {pair['chosen']} || {pair['rejected']}"
+            )
+            if dedup_key in seen_pairs:
+                continue
+            seen_pairs.add(dedup_key)
+            pairs.append(pair)
+            if limit is not None and len(pairs) >= limit:
+                return pairs
+
+    return pairs
 
 
 def _filtered_conversations(raw_paths: dict[str, Path]) -> list[dict[str, Any]]:
@@ -1060,10 +1539,21 @@ def _filtered_conversations(raw_paths: dict[str, Path]) -> list[dict[str, Any]]:
     clean_conversations: list[dict[str, Any]] = []
     for entry in all_conversations:
         conv = entry["messages"]
+        source = str(entry.get("source", "unknown"))
+        if source in _SFT_NO_FILTER_SOURCES:
+            if any(message.get("role") == "assistant" and str(message.get("content", "")).strip() for message in conv):
+                clean_conversations.append(entry)
+            continue
+        allow_relaxed_style = source in _SFT_RELAXED_STYLE_SOURCES
+        user_texts = [message["content"] for message in conv if message["role"] == "user"]
         assistant_texts = [message["content"] for message in conv if message["role"] == "assistant"]
         if not assistant_texts:
             continue
-        if any(not _assistant_style_ok(text) for text in assistant_texts):
+        if any(not _user_style_ok(text) for text in user_texts):
+            continue
+        if any(not _assistant_style_ok(text, allow_relaxed_tunisian=allow_relaxed_style) for text in assistant_texts):
+            continue
+        if not conversation_domain_ok(conv, source=source):
             continue
         clean_conversations.append(entry)
 
@@ -1076,6 +1566,8 @@ def _is_low_quality_text(text: str) -> bool:
         return True
     tokens = normalized.split()
     if len(tokens) < 2:
+        return True
+    if len(tokens) > 80:
         return True
     unique_ratio = len(set(tokens)) / max(1, len(tokens))
     if len(tokens) >= 8 and unique_ratio < 0.35:
@@ -1096,6 +1588,160 @@ def _format_chat_messages(messages: list[dict[str, str]]) -> str:
             continue
         lines.append(f"{role_map[role]}: {content}")
     return "\n".join(lines).strip()
+
+
+def _conversation_fingerprint(messages: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for message in normalize_messages(messages):
+        role = message.get("role")
+        if role == "system":
+            continue
+        content = normalize_for_dedup(message.get("content", ""))
+        if role in {"user", "assistant"} and content:
+            parts.append(f"{role}:{content}")
+    return " || ".join(parts)
+
+
+def _collapse_sft_conversation_entries(entries: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    collapsed: dict[str, dict[str, Any]] = {}
+    for entry in entries:
+        messages = entry.get("messages", [])
+        fingerprint = _conversation_fingerprint(messages)
+        if not fingerprint:
+            continue
+
+        source = str(entry.get("source", "unknown"))
+        weight = max(1, int(entry.get("weight", 1)))
+        existing = collapsed.get(fingerprint)
+        if existing is None:
+            collapsed[fingerprint] = {
+                "messages": messages,
+                "source": source,
+                "sources": [source],
+                "weight": weight,
+            }
+            continue
+
+        if source not in existing["sources"]:
+            existing["sources"].append(source)
+        if weight >= int(existing.get("weight", 1)):
+            existing["messages"] = messages
+            existing["source"] = source
+        existing["weight"] = max(int(existing.get("weight", 1)), weight)
+
+    return list(collapsed.values())
+
+
+def _repeat_count_from_weight(weight: int) -> int:
+    repeats = 1
+    if weight >= 4:
+        repeats += 1
+    if weight >= 7:
+        repeats += 1
+    return min(CFG.max_sft_train_repeats, max(1, repeats))
+
+
+def _materialize_weighted_train_conversations(entries: list[dict[str, Any]]) -> list[list[dict[str, str]]]:
+    materialized: list[list[dict[str, str]]] = []
+    for entry in entries:
+        repeats = _repeat_count_from_weight(int(entry.get("weight", 1)))
+        materialized.extend([entry["messages"]] * repeats)
+    return materialized
+
+
+def _script_distribution_from_conversations(conversations: list[list[dict[str, str]]]) -> dict[str, Any]:
+    counts: Counter[str] = Counter()
+    total_turns = 0
+    for conversation in conversations:
+        for message in normalize_messages(conversation):
+            if message.get("role") not in {"user", "assistant"}:
+                continue
+            content = message.get("content", "")
+            if not content:
+                continue
+            counts[detect_script(content)] += 1
+            total_turns += 1
+
+    percentages = {
+        key: round(value / max(total_turns, 1) * 100, 2)
+        for key, value in sorted(counts.items())
+    }
+    return {
+        "total_turns": total_turns,
+        "counts": dict(sorted(counts.items())),
+        "percentages": percentages,
+    }
+
+
+def _build_sft_fallback_entries() -> list[dict[str, Any]]:
+    fallback_entries: list[dict[str, Any]] = []
+
+    for conversation in _build_augmented_intent_conversations(
+        variants_per_row=CFG.sft_fallback_augmented_variants_per_row,
+    ):
+        fallback_entries.append(
+            {
+                "messages": conversation,
+                "source": "commandes_augmented",
+                "weight": _conversation_weight("commandes_augmented"),
+            }
+        )
+
+    for conversation in _generate_slot_rich_bootstrap_conversations(limit=CFG.sft_fallback_slot_bootstrap_limit):
+        fallback_entries.append(
+            {
+                "messages": conversation,
+                "source": "slot_bootstrap",
+                "weight": _conversation_weight("slot_bootstrap"),
+            }
+        )
+
+    for conversation in _build_rag_grounded_conversations(
+        max_delivery=CFG.sft_fallback_rag_delivery_limit,
+        max_lens=CFG.sft_fallback_rag_lens_limit,
+    ):
+        fallback_entries.append(
+            {
+                "messages": conversation,
+                "source": "rag_grounded",
+                "weight": _conversation_weight("rag_grounded"),
+            }
+        )
+
+    return fallback_entries
+
+
+def _ensure_min_sft_unique_conversations(entries: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    target_unique = max(1, int(CFG.min_sft_unique_conversations))
+    initial_unique = len(entries)
+    if initial_unique >= target_unique:
+        return entries, {
+            "target_unique": target_unique,
+            "initial_unique": initial_unique,
+            "final_unique": initial_unique,
+            "fallback_added_unique": 0,
+            "fallback_triggered": False,
+        }
+
+    fallback_entries = _build_sft_fallback_entries()
+    expanded_entries = _collapse_sft_conversation_entries(entries + fallback_entries)
+    final_unique = len(expanded_entries)
+    added_unique = max(0, final_unique - initial_unique)
+
+    logger.warning(
+        "SFT unique conversations below target (%d < %d). Fallback augmentation added %d unique conversations.",
+        initial_unique,
+        target_unique,
+        added_unique,
+    )
+
+    return expanded_entries, {
+        "target_unique": target_unique,
+        "initial_unique": initial_unique,
+        "final_unique": final_unique,
+        "fallback_added_unique": added_unique,
+        "fallback_triggered": True,
+    }
 
 
 def _extract_chat_samples(row: dict[str, Any], max_turns: int = 8) -> list[dict[str, str]]:
@@ -1219,7 +1865,11 @@ def prepare_self_supervised_data(
         for row in _load_jsonl(path):
             for sample in _extract_chat_samples(row):
                 candidate_count += 1
+                if _contains_instructional_noise(sample["text"]):
+                    continue
                 if not _self_sup_language_ok(sample["anchor"], strict_tunisian=strict_tunisian):
+                    continue
+                if not is_clean_tounsi(sample["anchor"], max_fusha=3):
                     continue
                 dedup_key = normalize_for_dedup(sample["text"])
                 if dedup_key in seen:
@@ -1243,6 +1893,8 @@ def prepare_self_supervised_data(
                 if "```" in text:
                     continue
                 if _is_low_quality_text(text):
+                    continue
+                if not is_clean_tounsi(text, max_fusha=3):
                     continue
                 if not _self_sup_language_ok(text, strict_tunisian=strict_tunisian):
                     continue
@@ -1270,6 +1922,8 @@ def prepare_self_supervised_data(
                 if len(text) < 20:
                     continue
                 if _is_low_quality_text(text):
+                    continue
+                if not is_clean_tounsi(text, max_fusha=3):
                     continue
                 dedup_key = normalize_for_dedup(text)
                 if dedup_key in seen:
@@ -1347,22 +2001,18 @@ def prepare_sft_data(
     output_dir = output_dir or PROCESSED_DATA_DIR
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    conversation_entries = _filtered_conversations(raw_paths)
-    weighted_conversations: list[list[dict[str, str]]] = []
-    for entry in conversation_entries:
-        weighted_conversations.extend([entry["messages"]] * max(1, int(entry.get("weight", 1))))
-
-    clean_conversations = weighted_conversations
-    if max_samples and len(clean_conversations) > max_samples:
+    conversation_entries = _collapse_sft_conversation_entries(_filtered_conversations(raw_paths))
+    conversation_entries, fallback_summary = _ensure_min_sft_unique_conversations(conversation_entries)
+    if max_samples and len(conversation_entries) > max_samples:
         random.seed(SEED)
-        clean_conversations = random.sample(clean_conversations, max_samples)
+        conversation_entries = random.sample(conversation_entries, max_samples)
 
     random.seed(SEED)
-    random.shuffle(clean_conversations)
+    random.shuffle(conversation_entries)
 
-    n = len(clean_conversations)
+    n = len(conversation_entries)
     if n <= 2:
-        train = clean_conversations
+        train_entries = conversation_entries
         val = []
         test = []
     else:
@@ -1374,13 +2024,72 @@ def prepare_sft_data(
             elif n_test > 1:
                 n_test -= 1
 
-        train = clean_conversations[: max(1, n - n_val - n_test)]
-        val = clean_conversations[len(train) : len(train) + n_val]
-        test = clean_conversations[len(train) + len(val) :]
+        def _entry_key(entry: dict[str, Any]) -> str:
+            fingerprint = _conversation_fingerprint(entry.get("messages", []))
+            return fingerprint or normalize_for_dedup(str(entry.get("messages", "")))
+
+        eval_target = n_val + n_test
+        domain_pool = [
+            entry
+            for entry in conversation_entries
+            if conversation_domain_ok(entry.get("messages", []), source="validation")
+        ]
+        non_domain_pool = [
+            entry
+            for entry in conversation_entries
+            if not conversation_domain_ok(entry.get("messages", []), source="validation")
+        ]
+
+        eval_entries = list(domain_pool[:eval_target])
+        if len(eval_entries) < eval_target:
+            eval_entries.extend(non_domain_pool[: eval_target - len(eval_entries)])
+
+        eval_keys = {_entry_key(entry) for entry in eval_entries}
+        train_entries = [entry for entry in conversation_entries if _entry_key(entry) not in eval_keys]
+
+        if len(train_entries) < 1 and eval_entries:
+            train_entries = [eval_entries.pop()]
+
+        val_entries = eval_entries[:n_val]
+        test_entries = eval_entries[n_val : n_val + n_test]
+        val = [entry["messages"] for entry in val_entries]
+        test = [entry["messages"] for entry in test_entries]
 
     if n > 2 and not val:
         val = test[:1]
         test = test[1:]
+
+    train = _materialize_weighted_train_conversations(train_entries)
+    source_distribution = dict(
+        sorted(
+            Counter(str(entry.get("source", "unknown")) for entry in conversation_entries).items(),
+            key=lambda item: item[0],
+        )
+    )
+    train_script_distribution = _script_distribution_from_conversations(train)
+    val_script_distribution = _script_distribution_from_conversations(val)
+    test_script_distribution = _script_distribution_from_conversations(test)
+    prep_report = {
+        "unique_conversations": len(conversation_entries),
+        "train_unique_conversations": len(train_entries),
+        "train_materialized_conversations": len(train),
+        "val_unique_conversations": len(val),
+        "test_unique_conversations": len(test),
+        "max_train_repeats": CFG.max_sft_train_repeats,
+        "train_repeat_factor": round(len(train) / max(len(train_entries), 1), 2),
+        "min_unique_target": CFG.min_sft_unique_conversations,
+        "source_distribution": source_distribution,
+        "fallback_summary": fallback_summary,
+        "script_distribution": {
+            "train": train_script_distribution,
+            "val": val_script_distribution,
+            "test": test_script_distribution,
+        },
+    }
+    (REPORTS_DIR / "sft_data_prep.json").write_text(
+        json.dumps(prep_report, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
     paths = {}
     for split_name, split_data in [("train", train), ("val", val), ("test", test)]:
@@ -1390,6 +2099,7 @@ def prepare_sft_data(
                 handle.write(json.dumps({"messages": conv}, ensure_ascii=False) + "\n")
         paths[split_name] = path
         logger.info("SFT %s: %d conversations -> %s", split_name, len(split_data), path)
+    logger.info("SFT prep summary: %s", prep_report)
     return paths
 
 
@@ -1403,6 +2113,7 @@ def prepare_dpo_data(
     pairs: list[dict[str, str]] = []
     seen_pairs: set[str] = set()
     spec_map = dataset_spec_map()
+    source_counts: dict[str, int] = {}
 
     for name, path in raw_paths.items():
         spec = spec_map.get(name, {})
@@ -1419,7 +2130,7 @@ def prepare_dpo_data(
                 continue
             if len(pair["chosen"].strip()) < 15 or len(pair["rejected"].strip()) < 15:
                 continue
-            if is_moroccan_or_algerian(pair["prompt"] + " " + pair["chosen"] + " " + pair["rejected"]):
+            if not _dpo_pair_ok(pair):
                 continue
 
             dedup_key = normalize_for_dedup(
@@ -1434,6 +2145,7 @@ def prepare_dpo_data(
             if source_cap_int is not None and loaded_for_source >= source_cap_int:
                 break
 
+        source_counts[name] = loaded_for_source
         logger.info(
             "DPO source=%s loaded_pairs=%d cap=%s",
             name,
@@ -1444,7 +2156,7 @@ def prepare_dpo_data(
     if APPROVED_FEEDBACK_DPO_PATH.exists():
         for row in _load_jsonl(APPROVED_FEEDBACK_DPO_PATH):
             pair = _extract_dpo_pair(row)
-            if pair:
+            if pair and _dpo_pair_ok(pair):
                 dedup_key = normalize_for_dedup(
                     f"{pair['prompt']} || {pair['chosen']} || {pair['rejected']}"
                 )
@@ -1452,6 +2164,24 @@ def prepare_dpo_data(
                     continue
                 seen_pairs.add(dedup_key)
                 pairs.append(pair)
+                source_counts["approved_feedback"] = source_counts.get("approved_feedback", 0) + 1
+
+    target_total_pairs = max(int(CFG.min_dpo_train_rows * 1.2), CFG.min_dpo_train_rows + 500)
+    synthetic_added = 0
+    if len(pairs) < target_total_pairs:
+        synthetic_pairs = _build_synthetic_dpo_pairs(raw_paths, limit=target_total_pairs - len(pairs))
+        for pair in synthetic_pairs:
+            dedup_key = normalize_for_dedup(
+                f"{pair['prompt']} || {pair['chosen']} || {pair['rejected']}"
+            )
+            if dedup_key in seen_pairs:
+                continue
+            seen_pairs.add(dedup_key)
+            pairs.append(pair)
+            synthetic_added += 1
+        if synthetic_added:
+            source_counts["synthetic_domain_dpo"] = synthetic_added
+            logger.info("DPO synthetic_domain_dpo added_pairs=%d", synthetic_added)
 
     if not pairs:
         logger.warning("No DPO pairs found after filtering.")
@@ -1477,7 +2207,199 @@ def prepare_dpo_data(
                 handle.write(json.dumps(pair, ensure_ascii=False) + "\n")
         paths[split_name] = path
         logger.info("DPO %s: %d pairs -> %s", split_name, len(split_data), path)
+
+    (REPORTS_DIR / "dpo_data_prep.json").write_text(
+        json.dumps(
+            {
+                "total_pairs": len(pairs),
+                "train_pairs": len(train),
+                "val_pairs": len(val),
+                "source_counts": source_counts,
+                "synthetic_added": synthetic_added,
+                "target_total_pairs": target_total_pairs,
+            },
+            ensure_ascii=False,
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
     return paths
+
+
+def _iter_jsonl(path: Path) -> list[dict[str, Any]]:
+    return _load_jsonl(path)
+
+
+def _count_jsonl_rows(path: Path | None) -> int:
+    if not path or not path.exists():
+        return 0
+    with open(path, encoding="utf-8") as handle:
+        return sum(1 for line in handle if line.strip())
+
+
+def _collect_processed_texts(path: Path | None, key: str) -> list[str]:
+    if not path or not path.exists():
+        return []
+    rows = _iter_jsonl(path)
+    texts: list[str] = []
+    for row in rows:
+        value = row.get(key)
+        if isinstance(value, str) and value.strip():
+            texts.append(value.strip())
+    return texts
+
+
+def _collect_sft_messages(path: Path | None) -> list[list[dict[str, str]]]:
+    if not path or not path.exists():
+        return []
+    rows = _iter_jsonl(path)
+    conversations: list[list[dict[str, str]]] = []
+    for row in rows:
+        messages = row.get("messages")
+        if isinstance(messages, list):
+            conversations.append(normalize_messages(messages))
+    return conversations
+
+
+def _write_prepared_dataset_audit(outputs: dict[str, dict[str, Path]]) -> None:
+    marker_patterns = {
+        "num_client": re.compile(r"num[_ ]?client|code[_ ]?client|\bCLI\d+", re.IGNORECASE),
+        "order_id": re.compile(r"\bCMD[-_ ]?\d+", re.IGNORECASE),
+        "reference": re.compile(r"r[ée]f[ée]rence|code verre|catalog|catalogue", re.IGNORECASE),
+        "delivery": re.compile(r"livraison|agence|secteur|creneau|créneau|planning", re.IGNORECASE),
+        "optic_values": re.compile(r"\bOD\b|\bOG\b|sphere|sphère|cyl|cylindre|axe|addition|diam[eè]tre", re.IGNORECASE),
+        "availability": re.compile(r"dispo|disponibilit|stock|fabrication|sur commande", re.IGNORECASE),
+    }
+
+    def pick_example(conversations: list[list[dict[str, str]]], pattern: re.Pattern[str]) -> dict[str, str] | None:
+        for conversation in conversations:
+            joined = " ".join(message.get("content", "") for message in conversation)
+            if not pattern.search(joined):
+                continue
+            user_text = next((m.get("content", "") for m in conversation if m.get("role") == "user"), "")
+            assistant_text = next((m.get("content", "") for m in conversation if m.get("role") == "assistant"), "")
+            if user_text and assistant_text:
+                return {"user": user_text, "assistant": assistant_text}
+        return None
+
+    self_sup_train = outputs.get("self_sup", {}).get("train")
+    self_sup_val = outputs.get("self_sup", {}).get("val")
+    sft_train = outputs.get("sft", {}).get("train")
+    sft_val = outputs.get("sft", {}).get("val")
+    sft_test = outputs.get("sft", {}).get("test")
+    dpo_train = outputs.get("dpo", {}).get("train")
+    dpo_val = outputs.get("dpo", {}).get("val")
+
+    self_sup_texts = _collect_processed_texts(self_sup_train, "text")
+    self_sup_val_texts = _collect_processed_texts(self_sup_val, "text")
+    sft_conversations = _collect_sft_messages(sft_train)
+    sft_val_conversations = _collect_sft_messages(sft_val)
+    dpo_pairs = _iter_jsonl(dpo_train) if dpo_train and dpo_train.exists() else []
+
+    commandes_rows = _load_jsonl(COMMANDES_INTENTS_PATH)
+    intent_counts = Counter()
+    slot_field_counts = Counter()
+    for row in commandes_rows:
+        intent = canonicalize_intent(row.get("intent"))
+        if intent:
+            intent_counts[intent] += 1
+        slots = row.get("slots", {}) if isinstance(row.get("slots"), dict) else {}
+        for key, value in slots.items():
+            if value not in ("", None, [], {}):
+                slot_field_counts[key] += 1
+
+    sft_conversation_hits = Counter()
+    sft_assistant_hits = Counter()
+    for conversation in sft_conversations:
+        joined = " ".join(message.get("content", "") for message in conversation)
+        for label, pattern in marker_patterns.items():
+            if pattern.search(joined):
+                sft_conversation_hits[label] += 1
+            if any(
+                message.get("role") == "assistant" and pattern.search(message.get("content", ""))
+                for message in conversation
+            ):
+                sft_assistant_hits[label] += 1
+
+    dpo_prompt_hits = Counter()
+    for row in dpo_pairs:
+        prompt = str(row.get("prompt", ""))
+        for label, pattern in marker_patterns.items():
+            if pattern.search(prompt):
+                dpo_prompt_hits[label] += 1
+
+    report = {
+        "commandes_intents_source": {
+            "path": str(COMMANDES_INTENTS_PATH),
+            "rows": len(commandes_rows),
+            "intent_counts": dict(intent_counts),
+            "slot_field_counts": dict(slot_field_counts),
+        },
+        "self_sup": {
+            "train_rows": _count_jsonl_rows(self_sup_train),
+            "val_rows": _count_jsonl_rows(self_sup_val),
+            "train_quality": compute_quality_stats(self_sup_texts[:5000]),
+            "val_quality": compute_quality_stats(self_sup_val_texts[:1000]),
+        },
+        "sft": {
+            "train_rows": _count_jsonl_rows(sft_train),
+            "val_rows": _count_jsonl_rows(sft_val),
+            "test_rows": _count_jsonl_rows(sft_test),
+            "train_marker_coverage": dict(sft_conversation_hits),
+            "assistant_marker_coverage": dict(sft_assistant_hits),
+            "val_rows_loaded_for_examples": len(sft_val_conversations),
+            "examples": {
+                label: pick_example(sft_conversations, pattern)
+                for label, pattern in marker_patterns.items()
+            },
+        },
+        "dpo": {
+            "train_rows": _count_jsonl_rows(dpo_train),
+            "val_rows": _count_jsonl_rows(dpo_val),
+            "prompt_marker_coverage": dict(dpo_prompt_hits),
+            "examples": dpo_pairs[:3],
+        },
+    }
+
+    report_json_path = REPORTS_DIR / "prepared_dataset_audit.json"
+    report_md_path = REPORTS_DIR / "prepared_dataset_audit.md"
+    report_json_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    markdown_lines = [
+        "# Prepared Dataset Audit",
+        "",
+        "## Commandes Intents Source",
+        f"- rows: {report['commandes_intents_source']['rows']}",
+        f"- intents: {json.dumps(report['commandes_intents_source']['intent_counts'], ensure_ascii=False)}",
+        f"- slot_fields: {json.dumps(report['commandes_intents_source']['slot_field_counts'], ensure_ascii=False)}",
+        "",
+        "## Self-Supervised",
+        f"- train_rows: {report['self_sup']['train_rows']}",
+        f"- val_rows: {report['self_sup']['val_rows']}",
+        f"- train_quality: {json.dumps(report['self_sup']['train_quality'], ensure_ascii=False)}",
+        "",
+        "## SFT",
+        f"- train_rows: {report['sft']['train_rows']}",
+        f"- val_rows: {report['sft']['val_rows']}",
+        f"- test_rows: {report['sft']['test_rows']}",
+        f"- train_marker_coverage: {json.dumps(report['sft']['train_marker_coverage'], ensure_ascii=False)}",
+        f"- assistant_marker_coverage: {json.dumps(report['sft']['assistant_marker_coverage'], ensure_ascii=False)}",
+        "",
+        "## DPO",
+        f"- train_rows: {report['dpo']['train_rows']}",
+        f"- val_rows: {report['dpo']['val_rows']}",
+        f"- prompt_marker_coverage: {json.dumps(report['dpo']['prompt_marker_coverage'], ensure_ascii=False)}",
+        "",
+        "## SFT Examples",
+    ]
+    for label, example in report["sft"]["examples"].items():
+        markdown_lines.append(f"- {label}: {json.dumps(example, ensure_ascii=False)}")
+    markdown_lines.extend(["", "## DPO Examples"])
+    for example in report["dpo"]["examples"]:
+        markdown_lines.append(f"- {json.dumps(example, ensure_ascii=False)}")
+
+    report_md_path.write_text("\n".join(markdown_lines) + "\n", encoding="utf-8")
+    logger.info("Prepared dataset audit written to %s and %s", report_json_path, report_md_path)
 
 
 def prepare_all_data(
@@ -1486,8 +2408,10 @@ def prepare_all_data(
     max_sft_samples: int | None = None,
     max_self_sup_texts: int | None = None,
 ) -> dict[str, dict[str, Path]]:
-    return {
+    outputs = {
         "self_sup": prepare_self_supervised_data(raw_paths, output_dir=output_dir, max_texts=max_self_sup_texts),
         "sft": prepare_sft_data(raw_paths, output_dir=output_dir, max_samples=max_sft_samples),
         "dpo": prepare_dpo_data(raw_paths, output_dir=output_dir),
     }
+    _write_prepared_dataset_audit(outputs)
+    return outputs

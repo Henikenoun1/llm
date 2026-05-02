@@ -3,6 +3,10 @@
   "domain_name": "optical_call_center_tn",
   "organization": "SIVO ESSILOR",
   "assistant_name": "Mohsen",
+  "assistant_context": {
+    "service_scope": "les opticiens en Tunisie",
+    "location": "Tunisie"
+  },
   "default_language": "tounsi",
   "supported_languages": [
     "tounsi",
@@ -114,7 +118,9 @@
       "name": "chatbot",
       "type": "dialogue",
       "roles": [
-        "self_sup"
+        "self_sup",
+        "sft",
+        "conversation"
       ],
       "hf_dataset": "abdouuu/tunisian_chatbot_data",
       "split": "train",
@@ -275,6 +281,16 @@
       "max_rows": 50000,
       "max_dpo_pairs": 12000
     }
+  ],
+  "sft_domain_bypass_sources": [
+    "chatbot",
+    "tunisian_railway_dialogues"
+  ],
+  "sft_relaxed_style_sources": [
+    "sft"
+  ],
+  "sft_no_filter_sources": [
+    "sft"
   ],
   "business_context": {
     "ecosystem": "SIVO Essilor est le fournisseur central des produits optiques pour les opticiens.",

@@ -2,6 +2,7 @@ import copy
 import sys
 import tempfile
 import unittest
+import re
 from pathlib import Path
 
 
@@ -335,6 +336,120 @@ class RuntimeStateTests(unittest.TestCase):
 
         self.assertEqual(second["intent"], "price_inquiry")
         self.assertNotIn("color", second["session_state"]["known_slots"])
+
+    def test_delivery_schedule_without_scope_asks_for_agence_instead_of_guessing(self) -> None:
+        store = ConversationMemoryStore()
+        retriever = _DummyRetriever()
+
+        result = production_infer(
+            user_text="nheb na3ref livraison wa9teh tousel bedhabt",
+            retriever=retriever,
+            session_id="delivery-no-scope",
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+
+        self.assertEqual(result["intent"], "delivery_schedule")
+        self.assertIn("agence", result["response"].lower())
+        self.assertNotIn("ariana", result["response"].lower())
+
+    def test_delivery_follow_up_keeps_context_after_first_answer(self) -> None:
+        store = ConversationMemoryStore()
+        retriever = _DummyRetriever()
+        session_id = "delivery-follow-up"
+
+        first = production_infer(
+            user_text="planning livraison agence aouina secteur marsa / lac",
+            retriever=retriever,
+            session_id=session_id,
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+        store.append_exchange(
+            session_id,
+            "planning livraison agence aouina secteur marsa / lac",
+            first["response"],
+            model_variant="prod",
+            metadata={"intent": first["intent"], "slots": first["slots"]},
+        )
+
+        second = production_infer(
+            user_text="9h30 wala nhar e5er ?",
+            retriever=retriever,
+            session_id=session_id,
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+
+        self.assertEqual(second["intent"], "delivery_schedule")
+        self.assertNotEqual(second["response_source"], "fallback")
+        self.assertTrue(
+            "ta9ribi" in second["response"].lower() or "n2akked" in second["response"].lower()
+        )
+
+    def test_general_side_question_preserves_open_business_task(self) -> None:
+        store = ConversationMemoryStore()
+        retriever = _DummyRetriever()
+        session_id = "general-side-question"
+
+        first = production_infer(
+            user_text="salem nheb commande progressive marron",
+            retriever=retriever,
+            session_id=session_id,
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+        store.append_exchange(
+            session_id,
+            "salem nheb commande progressive marron",
+            first["response"],
+            model_variant="prod",
+            metadata={"intent": first["intent"], "slots": first["slots"]},
+        )
+
+        second = production_infer(
+            user_text="chnou lyoum tawa ?",
+            retriever=retriever,
+            session_id=session_id,
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+
+        self.assertEqual(second["intent"], "current_date")
+        self.assertTrue(second["session_state"]["open_form"])
+        self.assertEqual(second["session_state"]["active_intent"], "create_order")
+        self.assertIn("product", second["session_state"]["known_slots"])
+
+    def test_ambiguous_business_opening_asks_which_need_first(self) -> None:
+        store = ConversationMemoryStore()
+        retriever = _DummyRetriever()
+
+        result = production_infer(
+            user_text="aslema nheb نحكي 3la commande",
+            retriever=retriever,
+            session_id="clarify-need",
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+
+        self.assertEqual(result["intent"], "clarify_need")
+        self.assertIn("suivi commande", result["response"].lower())
+        self.assertNotIn("num client", result["response"].lower())
+
+    def test_current_time_variant_chelwa9t_lyoum_returns_time(self) -> None:
+        store = ConversationMemoryStore()
+        retriever = _DummyRetriever()
+
+        result = production_infer(
+            user_text="chelwa9t lyoum",
+            retriever=retriever,
+            session_id="time-variant",
+            runtime_mode="autonomous",
+            memory_store=store,
+        )
+
+        self.assertEqual(result["intent"], "current_time")
+        self.assertRegex(result["response"], r"\b\d{2}:\d{2}\b")
 
 
 if __name__ == "__main__":

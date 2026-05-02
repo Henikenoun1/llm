@@ -122,7 +122,16 @@ class DatabaseBackend:
 
         try:
             connect_args = {"check_same_thread": False} if str(self.url).startswith("sqlite") else {}
-            self._engine = create_engine(self.url, future=True, echo=CFG.database_echo, connect_args=connect_args)
+            engine_kwargs: dict[str, Any] = {
+                "future": True,
+                "echo": CFG.database_echo,
+                "connect_args": connect_args,
+                "pool_pre_ping": True,
+            }
+            if str(self.url).startswith(("postgresql://", "postgresql+", "postgres://")):
+                connect_args["connect_timeout"] = 5
+                engine_kwargs["pool_recycle"] = 1800
+            self._engine = create_engine(self.url, **engine_kwargs)
             self._session_factory = sessionmaker(self._engine, expire_on_commit=False, future=True)
             Base.metadata.create_all(self._engine)
         except Exception as exc:  # pragma: no cover - runtime environment dependent

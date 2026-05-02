@@ -9,6 +9,7 @@ Inference pipeline with:
 """
 from __future__ import annotations
 
+from datetime import datetime
 import json
 import random
 import re
@@ -16,6 +17,7 @@ import threading
 import time
 import unicodedata
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
@@ -32,7 +34,7 @@ from .tools import ToolRegistry, get_tool_registry
 PHONE_RE = re.compile(r"\+?216[\s\-]?\d{2}[\s\-]?\d{3}[\s\-]?\d{3}")
 ORDER_RE = re.compile(r"\b(?:ORD|CMD)[-_]?[A-Z0-9]{4,}\b|\bimport[-_ ]?\d{3,8}\b", re.IGNORECASE)
 DATE_RE = re.compile(r"\b20\d{2}-\d{2}-\d{2}\b")
-TIME_RE = re.compile(r"\b(?:[01]?\d|2[0-3]):[0-5]\d\b")
+TIME_RE = re.compile(r"\b(?:[01]?\d|2[0-3])[:h][0-5]\d\b", re.IGNORECASE)
 _ARABIC_CHAR_RE = re.compile(r"[\u0600-\u06FF]")
 _LATIN_CHAR_RE = re.compile(r"[A-Za-z]")
 CUSTOMER_ID_RE = re.compile(r"\b(?:CLI|CLT|CLIENT|CUST)[-_]?\s*0*(\d{3,6})\b", re.IGNORECASE)
@@ -132,6 +134,143 @@ _FOLLOW_UP_CONFIRMATION_MARKERS = [
     "ثبّت",
 ]
 
+_SOCIAL_CHECK_IN_MARKERS = [
+    "cv",
+    "ca va",
+    "ça va",
+    "chhalek",
+    "chehalek",
+    "ch7alek",
+    "kifek",
+    "kifek",
+    "kif inti",
+    "labes",
+    "lebes",
+    "lbes",
+    "chnahwelk",
+    "chn7walek",
+    "كيفاش لاباس",
+    "شنحوالك",
+    "شنو احوالك",
+    "كيف حالك",
+    "لاباس",
+]
+
+_TEMPORAL_FOLLOW_UP_MARKERS = [
+    "date",
+    "today",
+    "aujourdhui",
+    "aujourd hui",
+    "lyoum",
+    "el youm",
+    "elyoum",
+    "nhar e5er",
+    "nhar akher",
+    "ghodwa",
+    "ghodwa",
+    "tji lyoum",
+    "lyoum tji",
+    "wa9tech",
+    "wa9tah",
+    "waktach",
+    "wa9tech tousel",
+    "today delivery",
+]
+
+_DATE_QUERY_MARKERS = [
+    "chnou lyoum",
+    "chnia lyoum",
+    "lyoum chnou",
+    "lyoum chnia",
+    "chnou nhar lyoum",
+    "date tawa",
+    "date taw",
+    "date lyoum",
+    "quel date",
+    "quelle date",
+    "aujourdhui",
+    "aujourd hui",
+    "today date",
+    "today",
+    "التاريخ اليوم",
+    "شنو التاريخ",
+    "شنوة التاريخ",
+    "اليوم شنو",
+    "اليوم شنية",
+]
+
+_TIME_QUERY_MARKERS = [
+    "chnou sa3a",
+    "chnia sa3a",
+    "sa3a tawa",
+    "sa3a taw",
+    "sa3a tawwa",
+    "chelwa9t",
+    "chelwa9t lyoum",
+    "chelwa9t tawa",
+    "chhal wa9t",
+    "chhalwa9t",
+    "chel wa9t",
+    "chnou wa9t",
+    "chnia wa9t",
+    "wa9t tawa",
+    "wa9t taw",
+    "heure tawa",
+    "heure taw",
+    "heure maintenant",
+    "what time",
+    "time now",
+    "current time",
+    "الساعة توة",
+    "شنو الساعة",
+    "شنية الساعة",
+    "الوقت توة",
+]
+
+_IDENTITY_QUERY_MARKERS = [
+    "chkoun inti",
+    "chkon inti",
+    "chkun inti",
+    "chkoun enty",
+    "who are you",
+    "qui es tu",
+    "chnou esmek",
+    "chnia esmek",
+    "ismek chnou",
+    "esmik chnou",
+    "اسمك شنية",
+    "شكون انت",
+    "من انت",
+]
+
+_CAPABILITY_QUERY_MARKERS = [
+    "chnou tnajjem ta3mel",
+    "chnou تنجم تعمل",
+    "chnou tkhdem",
+    "chnia khidmetek",
+    "what do you do",
+    "what is your job",
+    "what can you do",
+    "help me with",
+    "chnoua el khadma mte3ek",
+    "شنو تنجم تعمل",
+    "شنو خدمتك",
+    "اش تنجم تعاون",
+]
+
+_LOCATION_QUERY_MARKERS = [
+    "winik",
+    "win enti",
+    "fin enti",
+    "where are you",
+    "where are you based",
+    "fin mawjoud",
+    "win mawjoud",
+    "وينك",
+    "وين موجود",
+    "فين موجود",
+]
+
 _INTENT_CONTEXT_ANCHORS = {
     "create_order": {"num_client", "product", "reference", "lens_code", "material", "index", "color", "diameter"},
     "order_tracking": {"num_client", "order_id"},
@@ -140,6 +279,39 @@ _INTENT_CONTEXT_ANCHORS = {
     "reference_confirmation": {"reference", "lens_code"},
     "delivery_schedule": {"agence", "secteur", "city", "time_slot"},
     "appointment_booking": {"city", "date", "time_slot", "phone"},
+}
+
+_CONTEXT_SAFE_INTENTS = {
+    "greeting",
+    "thanks",
+    "clarify_need",
+    "current_date",
+    "current_time",
+    "current_datetime",
+    "agent_identity",
+    "agent_capabilities",
+    "agent_location",
+}
+
+_WEEKDAY_NAMES = {
+    "arabic": {
+        0: "الاثنين",
+        1: "الثلاثاء",
+        2: "الأربعاء",
+        3: "الخميس",
+        4: "الجمعة",
+        5: "السبت",
+        6: "الأحد",
+    },
+    "arabizi": {
+        0: "ethnin",
+        1: "thleth",
+        2: "larb3a",
+        3: "lkhamis",
+        4: "jom3a",
+        5: "essebt",
+        6: "la7ad",
+    },
 }
 
 _MODEL_CACHE: dict[str, tuple[Any, Any]] = {}
@@ -230,6 +402,81 @@ def _is_explicit_topic_reset(text: str) -> bool:
     return _has_text_signal(text, _TOPIC_RESET_MARKERS)
 
 
+def _is_social_check_in(text: str) -> bool:
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    return _has_text_signal(text, _SOCIAL_CHECK_IN_MARKERS)
+
+
+def _is_temporal_follow_up(text: str, extracted_slots: dict[str, Any] | None = None) -> bool:
+    extracted_slots = canonicalize_slots(extracted_slots)
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    if extracted_slots.get("date") or extracted_slots.get("time_slot"):
+        return True
+    if TIME_RE.search(text):
+        return True
+    return _has_text_signal(text, _TEMPORAL_FOLLOW_UP_MARKERS)
+
+
+def _is_context_safe_intent(intent: str) -> bool:
+    return canonicalize_intent(intent) in _CONTEXT_SAFE_INTENTS
+
+
+def _looks_like_current_date_query(text: str) -> bool:
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    if _has_text_signal(text, _DATE_QUERY_MARKERS):
+        return True
+    today_tokens = ["lyoum", "elyoum", "el youm", "today", "aujourdhui", "aujourd hui", "اليوم"]
+    date_tokens = ["date", "tarikh", "تاريخ", "التاريخ", "chnou", "chnia", "شنو", "شنية", "شنوة"]
+    return any(token in normalized for token in today_tokens) and any(token in normalized for token in date_tokens)
+
+
+def _looks_like_current_time_query(text: str) -> bool:
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    if _has_text_signal(text, _TIME_QUERY_MARKERS):
+        return True
+    time_tokens = ["sa3a", "heure", "time", "wa9t", "وقت"]
+    now_tokens = ["tawa", "taw", "tawwa", "lyoum", "elyoum", "el youm", "maintenant", "now", "اليوم", "توة"]
+    return any(token in normalized for token in time_tokens) and any(token in normalized for token in now_tokens)
+
+
+def _assistant_scope() -> str:
+    return str(
+        DOMAIN_CFG.get("assistant_context", {}).get("service_scope")
+        or "les opticiens en Tunisie"
+    ).strip()
+
+
+def _assistant_location() -> str:
+    return str(
+        DOMAIN_CFG.get("assistant_context", {}).get("location")
+        or "Tunisie"
+    ).strip()
+
+
+def _now_in_tunisia() -> datetime:
+    return datetime.now(ZoneInfo("Africa/Tunis"))
+
+
+def _format_tunis_date_parts(target_script: str) -> tuple[str, str]:
+    now = _now_in_tunisia()
+    weekday_map = _WEEKDAY_NAMES["arabizi" if target_script == "arabizi" else "arabic"]
+    weekday = weekday_map[now.weekday()]
+    date_text = now.strftime("%d/%m/%Y")
+    return weekday, date_text
+
+
+def _format_tunis_time_text() -> str:
+    return _now_in_tunisia().strftime("%H:%M")
+
+
 def _intent_anchor_slots(intent: str) -> set[str]:
     intent = canonicalize_intent(intent)
     anchors = set(DOMAIN_CFG.get("required_slots", {}).get(intent, []))
@@ -274,6 +521,8 @@ def _looks_like_active_follow_up(
         return True
     if any(slot_name in known_slots for slot_name in extracted_slots):
         return True
+    if active_intent in {"delivery_schedule", "order_tracking"} and _is_temporal_follow_up(text, extracted_slots):
+        return True
     if _has_text_signal(text, _FOLLOW_UP_CLARIFICATION_MARKERS):
         return True
     if _has_text_signal(text, _FOLLOW_UP_CONFIRMATION_MARKERS):
@@ -304,6 +553,8 @@ def _should_reset_active_context(
         return False
     if _is_explicit_topic_reset(text):
         return True
+    if _is_context_safe_intent(resolved_intent):
+        return False
     if resolved_intent not in {"unknown", "get_num_client", active_intent}:
         return True
 
@@ -321,6 +572,12 @@ def _should_reset_active_context(
     if token_count >= 3 and not extracted_slots and _context_overlap_score(text, active_intent, known_slots, []) < 0.12:
         return True
     return False
+
+
+def _should_preserve_open_task_state(intent: str, session_state: dict[str, Any] | None) -> bool:
+    session_state = session_state or {}
+    active_intent = canonicalize_intent(session_state.get("active_intent"))
+    return bool(active_intent and session_state.get("open_form") and _is_context_safe_intent(intent))
 
 
 def _preferred_response_script(user_text: str) -> str:
@@ -814,7 +1071,8 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
     business_keywords = DOMAIN_CFG.get("business_keywords", [])
     has_num_client = bool(extracted_slots.get("num_client"))
     has_order = bool(extracted_slots.get("order_id"))
-    has_greeting = has_keyword(intent_keywords.get("greeting", []))
+    social_signal = _is_social_check_in(text)
+    has_greeting = has_keyword(intent_keywords.get("greeting", [])) or social_signal
     schedule_signal = has_keyword(intent_keywords.get("delivery_schedule", [])) or any(
         token in normalized
         for token in ["livraison", "agence", "secteur", "créneau", "creneau", "horaire"]
@@ -857,9 +1115,34 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         token in normalized
         for token in ["9adech", "qadech", "gadech", "soum", "soum", "essoum", "thamen", "thman"]
     )
+    business_signal = any(
+        [
+            schedule_signal,
+            availability_signal,
+            reference_signal,
+            create_signal,
+            tracking_signal,
+            price_signal,
+        ]
+    )
+    date_query = _looks_like_current_date_query(text)
+    time_query = _looks_like_current_time_query(text)
+    if _has_text_signal(text, _IDENTITY_QUERY_MARKERS):
+        return "agent_identity"
+    if _has_text_signal(text, _CAPABILITY_QUERY_MARKERS):
+        return "agent_capabilities"
+    if _has_text_signal(text, _LOCATION_QUERY_MARKERS):
+        return "agent_location"
+    if not business_signal:
+        if date_query and time_query:
+            return "current_datetime"
+        if time_query:
+            return "current_time"
+        if date_query:
+            return "current_date"
 
-    if not has_num_client and business_opening and not create_signal and not tracking_signal and not availability_signal and not reference_signal and not schedule_signal:
-        return "get_num_client"
+    if business_opening and not create_signal and not tracking_signal and not availability_signal and not reference_signal and not schedule_signal and not price_signal:
+        return "clarify_need"
 
     if has_greeting and has_num_client and len(words) <= 4 and not (
         tracking_signal or create_signal or availability_signal or reference_signal
@@ -882,6 +1165,10 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         return "price_inquiry"
     if has_num_client and not (tracking_signal or create_signal or availability_signal or reference_signal):
         return "get_num_client"
+    if social_signal and not (
+        has_num_client or tracking_signal or create_signal or availability_signal or reference_signal or schedule_signal or price_signal
+    ):
+        return "greeting"
     if has_greeting and not has_keyword(business_keywords):
         return "greeting"
     if has_num_client and len(words) <= 4 and not (tracking_signal or create_signal or availability_signal or reference_signal):
@@ -1005,6 +1292,8 @@ def _resolve_turn_state(
     active_intent = canonicalize_intent(session_state.get("active_intent"))
     open_form = bool(session_state.get("open_form"))
     known_slots = session_state.get("slots", {}) if isinstance(session_state.get("slots"), dict) else {}
+    customer_context = session_state.get("customer_context", {}) if isinstance(session_state.get("customer_context"), dict) else {}
+    contextual_slots = _merge_slots(known_slots, customer_context)
 
     resolved_intent = canonicalize_intent(intent)
     extracted_slots = canonicalize_slots(extracted_slots)
@@ -1012,14 +1301,22 @@ def _resolve_turn_state(
     carried_slots: dict[str, Any] = {}
     if clear_task_state:
         return resolved_intent, extracted_slots, True
-    if active_intent and open_form and resolved_intent in {"unknown", "get_num_client", active_intent}:
+    if active_intent and resolved_intent in {"unknown", "get_num_client", active_intent} and _looks_like_active_follow_up(
+        text,
+        active_intent,
+        extracted_slots,
+        {**session_state, "slots": contextual_slots},
+    ):
         resolved_intent = active_intent
-        carried_slots = known_slots
+        carried_slots = contextual_slots
+    elif active_intent and open_form and resolved_intent in {"unknown", "get_num_client", active_intent}:
+        resolved_intent = active_intent
+        carried_slots = contextual_slots
     elif resolved_intent != "unknown" and resolved_intent == active_intent and open_form:
-        carried_slots = known_slots
+        carried_slots = contextual_slots
     elif resolved_intent == "unknown" and active_intent and len(text.split()) <= 8 and extracted_slots:
         resolved_intent = active_intent
-        carried_slots = known_slots
+        carried_slots = contextual_slots
 
     return resolved_intent, _merge_slots(carried_slots, extracted_slots), False
 
@@ -1043,8 +1340,12 @@ def _summarize_session_state(session_state: dict[str, Any] | None) -> dict[str, 
 def route_to_tool(intent: str, slots: dict[str, Any]) -> tuple[str | None, dict[str, Any], list[str]]:
     intent = canonicalize_intent(intent)
     slots = canonicalize_slots(slots)
+    if intent == "delivery_schedule" and slots.get("time_slot") and not slots.get("requested_slot"):
+        slots["requested_slot"] = slots["time_slot"]
     required = DOMAIN_CFG.get("required_slots", {}).get(intent, [])
     missing = [slot for slot in required if not slots.get(slot)]
+    if intent == "delivery_schedule" and not any(slots.get(field) for field in ["agence", "city", "secteur"]):
+        missing = ["agence"]
     tool_name = DOMAIN_CFG.get("intent_to_tool", {}).get(intent)
     if missing or not tool_name:
         return None, {}, missing
@@ -1408,7 +1709,7 @@ def _missing_slot_prompt(slot: str, target_script: str) -> str:
         "diameter": "يلزمني diametre باش نكمل.",
         "quantity": "قداش quantité تحب؟",
         "city": "في أي ville ولا agence تحب الخدمة؟",
-        "agence": "عطيني agence باش نثبت livraison.",
+        "agence": "عطيني agence ولا ville، وإذا تعرف secteur زيدو، باش نثبت livraison.",
         "secteur": "شنوة secteur من فضلك؟",
         "date": "شنوة التاريخ اللي يناسبك؟",
         "time_slot": "أي creneau تحب؟",
@@ -1431,7 +1732,7 @@ def _missing_slot_prompt(slot: str, target_script: str) -> str:
         "diameter": "Yelzemni diametre bach nkammel.",
         "quantity": "9adech quantite t7eb?",
         "city": "Fi anhi ville wala agence t7eb el khidma?",
-        "agence": "3atini agence bach nthabet el livraison.",
+        "agence": "3atini agence wala ville, w ken ta3ref secteur zidou, bach nthabet el livraison.",
         "secteur": "Chnoua el secteur men fadhlik?",
         "date": "Chnoua et date elli tensbek?",
         "time_slot": "Anhi creneau t7eb?",
@@ -1454,9 +1755,61 @@ def _topic_reset_response(target_script: str) -> str:
     )
 
 
+def _agent_identity_response(target_script: str) -> str:
+    assistant_name = str(DOMAIN_CFG.get("assistant_name", "Mohsen")).strip() or "Mohsen"
+    organization = str(DOMAIN_CFG.get("organization", "SIVO Essilor")).strip() or "SIVO Essilor"
+    scope = _assistant_scope()
+    return _script_text(
+        target_script,
+        arabic=f"أنا {assistant_name}، agent service client في {organization}. نخدم مع {scope} باش نعاون في suivi commande، commande، prix، disponibilité و livraison.",
+        latin=f"Ena {assistant_name}, agent service client fi {organization}. Nekhdem m3a {scope} bach n3awen fi suivi commande, commande, prix, disponibilite w livraison.",
+    )
+
+
+def _agent_capabilities_response(target_script: str) -> str:
+    return _script_text(
+        target_script,
+        arabic="نجم نعاونك في suivi commande، nouvelle commande، disponibilité، confirmation reference، prix تقريبي، planning livraison، وزادة نقلك التاريخ والساعة توة. وإذا الحاجة موش مؤكدة نقلك بصراحة ما نجمش نأكد توة.",
+        latin="Najjem n3awnek fi suivi commande, nouvelle commande, disponibilite, confirmation reference, prix ta9ribi, planning livraison, w zeda n9ollek et date w essa3a tawa. W ken el haja moch m2akkda n9ollek بصراحة ma najjemch n2akked tawa.",
+    )
+
+
+def _agent_location_response(target_script: str) -> str:
+    organization = str(DOMAIN_CFG.get("organization", "SIVO Essilor")).strip() or "SIVO Essilor"
+    location = _assistant_location()
+    return _script_text(
+        target_script,
+        arabic=f"أنا agent virtuel تابع لـ {organization} ونخدم على خدمة {location}. إذا تحب adresse دقيقة متاع agence، لازم تكون موجودة ومؤكدة في الـ système باش ما نخمنش.",
+        latin=f"Ena agent virtuel tebe3 {organization} w nekhdem 3la service {location}. Ken t7eb adresse دقيقة mta3 agence, lazem tkoun mawjouda w m2akkda fil system bach ma nkhamemch.",
+    )
+
+
+def _current_datetime_response(intent: str, target_script: str) -> str:
+    weekday, date_text = _format_tunis_date_parts(target_script)
+    time_text = _format_tunis_time_text()
+    if intent == "current_time":
+        return _script_text(
+            target_script,
+            arabic=f"توة الساعة {time_text} بتوقيت تونس.",
+            latin=f"Tawa essa3a {time_text} btaw9it Tounes.",
+        )
+    if intent == "current_date":
+        return _script_text(
+            target_script,
+            arabic=f"اليوم {weekday} {date_text}.",
+            latin=f"Lyoum {weekday} {date_text}.",
+        )
+    return _script_text(
+        target_script,
+        arabic=f"اليوم {weekday} {date_text}، وتوة الساعة {time_text} بتوقيت تونس.",
+        latin=f"Lyoum {weekday} {date_text}, w tawa essa3a {time_text} btaw9it Tounes.",
+    )
+
+
 def _render_controlled_response(
     *,
     intent: str,
+    user_text: str = "",
     slots: dict[str, Any],
     missing_slots: list[str],
     tool_name: str | None,
@@ -1472,10 +1825,22 @@ def _render_controlled_response(
     recap = _format_slots_recap(tool_result if isinstance(tool_result, dict) else slots, target_script) or _format_slots_recap(slots, target_script)
 
     if intent == "greeting":
+        if _is_social_check_in(user_text):
+            return _script_text(
+                target_script,
+                arabic="لاباس الحمد لله، يعطيك الصحة. قولي توة شنية نجم نعاونك فيه؟",
+                latin="Labes hamdoullah, ya3tik essa7a. 9olli tawa chnia najem n3awnek fih?",
+            )
         return _script_text(
             target_script,
-            arabic="عسلامة، مرحبا بيك. شنية الخدمة اللي تحب عليها اليوم؟",
-            latin="Aslema, marhbe bik. Chnia el khidma elli t7eb 3liha lyoum?",
+            arabic="عسلامة، مرحبا بيك. قولي شنية نجم نعاونك فيه اليوم؟",
+            latin="Aslema, marhbe bik. 9olli chnia najem n3awnek fih lyoum?",
+        )
+    if intent == "clarify_need":
+        return _script_text(
+            target_script,
+            arabic="أكيد. قولي فقط تحب suivi commande، nouvelle commande، disponibilité، prix، ولا livraison، وأنا نمشي معاك خطوة خطوة بلا ما نعاود نفس السؤال.",
+            latin="أكيد. 9olli bark t7eb suivi commande, nouvelle commande, disponibilite, prix, wala livraison, w ena نمشي m3ak khatwa khatwa bla ma n3awed nafs essou2el.",
         )
     if intent == "thanks":
         return _script_text(
@@ -1483,6 +1848,14 @@ def _render_controlled_response(
             arabic="على الرحب والسعة. إذا تحب نعاونك في حاجة أخرى قولي.",
             latin="3la rasse w l3in. Ken t7eb n3awnek fi 7aja o5ra, 9olli.",
         )
+    if intent == "agent_identity":
+        return _agent_identity_response(target_script)
+    if intent == "agent_capabilities":
+        return _agent_capabilities_response(target_script)
+    if intent == "agent_location":
+        return _agent_location_response(target_script)
+    if intent in {"current_date", "current_time", "current_datetime"}:
+        return _current_datetime_response(intent, target_script)
     if intent == "get_num_client":
         if slots.get("num_client"):
             num_client = _first_non_empty(slots.get("num_client"))
@@ -1639,6 +2012,24 @@ def _render_controlled_response(
 
     if intent == "delivery_schedule":
         if tool_status == "ok":
+            if _is_temporal_follow_up(user_text, slots):
+                agence = _first_non_empty(tool_result.get("agence"), slots.get("agence"), slots.get("city"))
+                secteur = _first_non_empty(tool_result.get("secteur"), slots.get("secteur"))
+                next_slot = _first_non_empty(tool_result.get("next_slot"), tool_result.get("premier_creneau"))
+                scope = _natural_join([item for item in [agence, secteur] if item], target_script)
+                return _script_text(
+                    target_script,
+                    arabic=(
+                        f"على planning {scope or 'agence'}، "
+                        + (f"أقرب passage تقريبي {next_slot}. " if next_slot else "")
+                        + "أما ما نجمش نأكد من توة إذا كان اليوم ولا نهار آخر، خاطر هذي تبقى fenêtre تقريبية موش confirmation نهائية."
+                    ),
+                    latin=(
+                        f"3la planning {scope or 'agence'}, "
+                        + (f"a9reb passage ta9ribi {next_slot}. " if next_slot else "")
+                        + "Ama ma najjemch n2akked men tawa ken hedha lyoum wala nhar e5er, khater hedhi teb9a fenetre ta9ribiya moch confirmation nehaiya."
+                    ),
+                )
             delivery = _delivery_phrase(tool_result, target_script)
             return delivery or _script_text(
                 target_script,
@@ -1693,6 +2084,7 @@ def _render_collect_response(
         return _get_fallback_response("unclear", target_script=target_script)
     scripted = _render_controlled_response(
         intent=intent,
+        user_text="",
         slots=slots,
         missing_slots=missing_slots,
         tool_name=tool_name,
@@ -1981,6 +2373,8 @@ def _is_garbage_response(text: str) -> bool:
         return True
     if "{" in text or "}" in text or "[tool_result]" in lowered or "[retrieval]" in lowered:
         return True
+    if any(marker in lowered for marker in ["[context]", "[agent]", "[session_state]", "[slots]", "[retrieval_summary]", "score="]):
+        return True
     if text.count(text[:10]) > 4 if len(text) >= 10 else False:
         return True
     return False
@@ -1990,24 +2384,24 @@ def _get_fallback_response(kind: str = "unclear", *, target_script: str = "arabi
     organization = DOMAIN_CFG.get("organization", "your company")
     dont_know = (
         [
-            f"Walla hedha mouche men service mta3 {organization}. Ken t7eb n3awnek fi sujet ykhosna 9olli.",
-            "Same7ni, ma 3andich ma3louma s7i7a 3al sujet hedha w ma n7ebech nkhammem.",
+            f"Hedha barra men service mta3 {organization}. Ken t7eb, najjem n3awnek fi suivi commande, livraison, disponibilite wala prix ta9ribi.",
+            "Same7ni, ma 3andich ma3louma m2akkda 3al sujet hedha, w ma n7ebech nkhammem. Ken t7eb sujet ykhosna 9olli nwasel m3ak.",
         ]
         if target_script == "arabizi"
         else [
-            f"والله هالحكاية موش من خدمة {organization}. إذا تحب نعاونك في الموضوع اللي يخصنا قولي.",
-            "سامحني، ما عنديش معلومة صحيحة على الموضوع هذا وما نحبش نخمن.",
+            f"الحكاية هاذي خارج خدمة {organization}. إذا تحب، نجم نعاونك في suivi commande، livraison، disponibilité ولا prix تقريبي.",
+            "سامحني، ما عنديش معلومة مؤكدة على الموضوع هذا وما نحبش نخمن. إذا تحب موضوع يخصنا قولي ونكمل معاك.",
         ]
     )
     unclear = (
         [
-            "3awed 9olli chnia t7eb bedhabt bach najem n3awnek.",
-            "El ma3louma mech wadha barcha, تنجم تفسرلي أكثر؟",
+            "Samahni, ma fhemtch 3lik belkoll. 9olliha b tari9a o5ra wala 7addedli juste chnou t7eb: suivi, commande, livraison, dispo, wala prix.",
+            "Mazel talabek mech wadha7 lia. Ken tnajem, 3atini el maqsoud b kelmetin o5rin w ena nkammel m3ak.",
         ]
         if target_script == "arabizi"
         else [
-            "عاود قلي شنية تحتاج بالضبط باش نجم نعاونك.",
-            "المعلومة موش واضحة برشا، تنجم تفسرلي أكثر؟",
+            "سامحني، ما فهمتش عليك بالكل. إذا تنجم عاودها بطريقة أخرى، ولا فقط حدّدلي: suivi، commande، livraison، disponibilité ولا prix.",
+            "مازال الطلب موش واضح ليا. فسرلي المقصود بكلمتين آخرين إذا تنجم، وأنا نكمل معاك.",
         ]
     )
     return random.choice(dont_know if kind == "dont_know" else unclear)
@@ -2152,6 +2546,7 @@ def production_infer(
     else:
         controlled_response = _render_controlled_response(
             intent=intent,
+            user_text=text,
             slots=slots,
             missing_slots=missing_slots,
             tool_name=tool_name,
@@ -2211,7 +2606,10 @@ def production_infer(
                 messages.append(
                     {
                         "role": "system",
-                        "content": "إذا ما فهمتش الطلب، اطلب توضيح مختصر وواضح. ما تجاوبش على حاجة موش واضحة.",
+                        "content": (
+                            "إذا كانت الرسالة تحية، small talk بسيط، سؤال على دورك، وقت، تاريخ، أو كيفاش تنجم تعاون، "
+                            "جاوب مباشرة وباختصار. وإذا الطلب مازال غامض، اطلب توضيح واحد فقط بلا ما تعاود نفس السؤال."
+                        ),
                     }
                 )
             elif intent == "get_num_client":
@@ -2243,16 +2641,17 @@ def production_infer(
     needs_human_review = bool(missing_slots) or bool(tool_name and not auto_execute_tool and runtime_mode != "collect_execute")
     if tool_status in {"error", "verification_failed", "not_found"}:
         needs_human_review = True
+    preserve_open_task_state = _should_preserve_open_task_state(intent, session_state)
     updated_state = session_state
     if memory_store and session_id:
         updated_state = memory_store.update_session_state(
             session_id,
             intent=intent,
             slots=slots,
-            missing_slots=missing_slots,
-            review_required=needs_human_review,
-            tool_call={"name": tool_name, "args": tool_args} if tool_name else None,
-            tool_result=tool_result,
+            missing_slots=list(session_state.get("missing_slots", []) or []) if preserve_open_task_state else missing_slots,
+            review_required=bool(session_state.get("review_required")) if preserve_open_task_state else needs_human_review,
+            tool_call=None if preserve_open_task_state else ({"name": tool_name, "args": tool_args} if tool_name else None),
+            tool_result=None if preserve_open_task_state else tool_result,
             clear_task_state=clear_task_state,
         )
 

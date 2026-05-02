@@ -17,11 +17,13 @@ from .config import (
     FEW_SHOTS_CFG,
     KB_DIR,
     PROCESSED_DATA_DIR,
+    RAG_ARTIFACTS_DIR,
     RAW_DATA_DIR,
     REPORTS_DIR,
     resolve_project_path,
 )
 from .data_prep import _build_rag_grounded_conversations, _load_jsonl, _load_rag_grounded_self_sup_texts
+from .data_prep import _conversation_fingerprint, conversation_domain_ok, is_clean_tounsi
 from .data_sources import dataset_specs, detect_script
 from .domain_utils import canonicalize_intent, canonicalize_slots, normalize_messages
 from .storage import get_database_backend
@@ -139,6 +141,106 @@ def _sft_script_coverage(path: Path) -> dict[str, Any]:
         "exists": True,
         "user": _script_distribution_from_texts(user_texts),
         "assistant": _script_distribution_from_texts(assistant_texts),
+    }
+
+
+def _processed_self_sup_quality(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {"exists": False, "examples": 0, "duplicate_examples": 0, "clean_tounsi_rate": 0.0}
+    rows = _load_jsonl(path)
+    texts = [str(row.get("text", "")) for row in rows if row.get("text")]
+    duplicates = len(texts) - len({" ".join(str(text).strip().lower().split()) for text in texts})
+    clean_rate = round(
+        sum(1 for text in texts if is_clean_tounsi(text, max_fusha=3)) / max(len(texts), 1) * 100,
+        2,
+    )
+    return {
+        "exists": True,
+        "examples": len(texts),
+        "duplicate_examples": duplicates,
+        "clean_tounsi_rate": clean_rate,
+    }
+
+
+def _processed_sft_quality(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "exists": False,
+            "examples": 0,
+            "duplicate_examples": 0,
+            "assistant_clean_tounsi_rate": 0.0,
+            "domain_relevance_rate": 0.0,
+        }
+    rows = _load_jsonl(path)
+    assistant_texts: list[str] = []
+    fingerprints: list[str] = []
+    domain_relevant = 0
+    for row in rows:
+        messages = normalize_messages(row.get("messages", []) if isinstance(row.get("messages"), list) else [])
+        assistant_texts.extend(
+            message["content"]
+            for message in messages
+            if message["role"] == "assistant" and message.get("content")
+        )
+        fingerprint = _conversation_fingerprint(messages)
+        if fingerprint:
+            fingerprints.append(fingerprint)
+        if conversation_domain_ok(messages, source="validation"):
+            domain_relevant += 1
+    duplicates = len(fingerprints) - len(set(fingerprints))
+    clean_rate = round(
+        sum(1 for text in assistant_texts if is_clean_tounsi(text, max_fusha=2)) / max(len(assistant_texts), 1) * 100,
+        2,
+    )
+    return {
+        "exists": True,
+        "examples": len(rows),
+        "duplicate_examples": duplicates,
+        "assistant_clean_tounsi_rate": clean_rate,
+        "domain_relevance_rate": round(domain_relevant / max(len(rows), 1) * 100, 2),
+    }
+
+
+def _processed_dpo_quality(path: Path) -> dict[str, Any]:
+    if not path.exists():
+        return {
+            "exists": False,
+            "examples": 0,
+            "chosen_clean_tounsi_rate": 0.0,
+            "domain_relevance_rate": 0.0,
+        }
+    rows = _load_jsonl(path)
+    chosen_texts = [str(row.get("chosen", "")) for row in rows if row.get("chosen")]
+    domain_relevant = sum(
+        1
+        for row in rows
+        if conversation_domain_ok(
+            [
+                {"role": "user", "content": str(row.get("prompt", ""))},
+                {"role": "assistant", "content": str(row.get("chosen", ""))},
+            ],
+            source="validation",
+        )
+    )
+    clean_rate = round(
+        sum(1 for text in chosen_texts if is_clean_tounsi(text, max_fusha=3)) / max(len(chosen_texts), 1) * 100,
+        2,
+    )
+    return {
+        "exists": True,
+        "examples": len(rows),
+        "chosen_clean_tounsi_rate": clean_rate,
+        "domain_relevance_rate": round(domain_relevant / max(len(rows), 1) * 100, 2),
+    }
+
+
+def _training_flow_summary() -> dict[str, Any]:
+    return {
+        "sequence": ["self_sup", "sft", "dpo", "promote"],
+        "self_sup_initializes_from": "base_model",
+        "sft_initializes_from": "self_sup_adapter_if_present_else_base_model",
+        "dpo_initializes_from": "sft_adapter",
+        "production_promotion_default": "dpo",
     }
 
 
@@ -283,6 +385,20 @@ def _rag_asset_summary() -> dict[str, Any]:
         "delivery_rag_present": delivery_rag_present,
         "lens_rag_present": lens_rag_present,
         "mojibake_suspected_files": mojibake_suspected_files,
+    }
+
+
+def _rag_artifact_summary() -> dict[str, Any]:
+    manifest_path = RAG_ARTIFACTS_DIR / "rag_manifest.json"
+    docs_path = RAG_ARTIFACTS_DIR / "rag_chunks.jsonl"
+    faiss_path = RAG_ARTIFACTS_DIR / "rag.index"
+    matrix_path = RAG_ARTIFACTS_DIR / "rag_matrix.npy"
+    return {
+        "artifact_dir": str(RAG_ARTIFACTS_DIR),
+        "manifest_exists": manifest_path.exists(),
+        "chunks_exists": docs_path.exists(),
+        "faiss_index_exists": faiss_path.exists(),
+        "matrix_exists": matrix_path.exists(),
     }
 
 
@@ -439,6 +555,15 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         "dpo_train": {"exists": (PROCESSED_DATA_DIR / "dpo_train.jsonl").exists(), "rows": _count_jsonl_rows(PROCESSED_DATA_DIR / "dpo_train.jsonl")},
         "dpo_val": {"exists": (PROCESSED_DATA_DIR / "dpo_val.jsonl").exists(), "rows": _count_jsonl_rows(PROCESSED_DATA_DIR / "dpo_val.jsonl")},
     }
+    processed_quality = {
+        "self_sup_train": _processed_self_sup_quality(PROCESSED_DATA_DIR / "self_sup_train.jsonl"),
+        "self_sup_val": _processed_self_sup_quality(PROCESSED_DATA_DIR / "self_sup_val.jsonl"),
+        "sft_train": _processed_sft_quality(PROCESSED_DATA_DIR / "sft_train.jsonl"),
+        "sft_val": _processed_sft_quality(PROCESSED_DATA_DIR / "sft_val.jsonl"),
+        "sft_test": _processed_sft_quality(PROCESSED_DATA_DIR / "sft_test.jsonl"),
+        "dpo_train": _processed_dpo_quality(PROCESSED_DATA_DIR / "dpo_train.jsonl"),
+        "dpo_val": _processed_dpo_quality(PROCESSED_DATA_DIR / "dpo_val.jsonl"),
+    }
 
     memory_cfg = DOMAIN_CFG.get("memory", {})
     session_state_path = resolve_project_path(memory_cfg.get("history_state_path", "data/history/session_state.json"))
@@ -455,6 +580,7 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         "sft_train": _sft_script_coverage(PROCESSED_DATA_DIR / "sft_train.jsonl"),
     }
 
+    issues: list[str] = []
     warnings: list[str] = []
     self_sup_scripts = language_coverage["self_sup_train"]["distribution"]["counts"] if language_coverage["self_sup_train"].get("exists") else {}
     sft_assistant_scripts = language_coverage["sft_train"]["assistant"]["counts"] if language_coverage["sft_train"].get("exists") else {}
@@ -483,7 +609,14 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         (row for row in raw_dataset_summary if str(row.get("name")) == "ssf_llm_sentiment_104k"),
         None,
     )
-    if external_ssf_source and not external_ssf_source.get("exists"):
+    if (
+        external_ssf_source
+        and not external_ssf_source.get("exists")
+        and (
+            _processed_rows(processed_summary, "self_sup_train")
+            + _processed_rows(processed_summary, "self_sup_val")
+        ) < int(CFG.self_sup_target_texts or 0)
+    ):
         warnings.append(
             "External SSF source 'ssf_llm_sentiment_104k' is not available. Place the file at "
             "data/tounsi_raw/enrichment/ssf_llm_sentiment_104k.jsonl for the 104k enrichment path."
@@ -505,7 +638,6 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         "policies_rows": _count_jsonl_rows(KB_DIR / "policies.jsonl"),
     }
 
-    issues = []
     for intent in missing_keyword_defs:
         issues.append(f"Intent missing keyword definition: {intent}")
     for intent in missing_tool_mapping:
@@ -576,6 +708,7 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
             "counts": db_counts,
         },
     }
+    rag_artifacts = _rag_artifact_summary()
 
     session_storage_ok = bool(
         runtime_storage["session_state"].get("exists")
@@ -632,6 +765,15 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
             "rag": rag_summary,
         },
         {
+            "name": "rag_artifacts_materialized",
+            "passed": (
+                rag_artifacts["manifest_exists"]
+                and rag_artifacts["chunks_exists"]
+                and (rag_artifacts["faiss_index_exists"] or rag_artifacts["matrix_exists"])
+            ),
+            "rag_artifacts": rag_artifacts,
+        },
+        {
             "name": "internal_playbooks_present",
             "passed": not rag_summary["missing_internal_playbooks"],
             "missing_internal_playbooks": rag_summary["missing_internal_playbooks"],
@@ -663,6 +805,81 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
             "name": "target_runtime_profile_t4",
             "passed": CFG.target_runtime_profile == "t4_16gb",
             "profile": CFG.target_runtime_profile,
+        },
+        {
+            "name": "self_sup_duplicates_free",
+            "passed": (
+                processed_quality["self_sup_train"]["duplicate_examples"] == 0
+                and processed_quality["self_sup_val"]["duplicate_examples"] == 0
+            ),
+            "processed_quality": {
+                "self_sup_train": processed_quality["self_sup_train"],
+                "self_sup_val": processed_quality["self_sup_val"],
+            },
+        },
+        {
+            "name": "self_sup_clean_tounsi_rate",
+            "passed": (
+                processed_quality["self_sup_train"]["clean_tounsi_rate"] >= CFG.min_self_sup_clean_tounsi_rate
+            ),
+            "required_rate": CFG.min_self_sup_clean_tounsi_rate,
+            "actual_rate": processed_quality["self_sup_train"]["clean_tounsi_rate"],
+        },
+        {
+            "name": "assistant_responses_tounsi_clean",
+            "passed": (
+                processed_quality["sft_train"]["assistant_clean_tounsi_rate"] >= CFG.required_sft_assistant_clean_rate
+                and processed_quality["sft_val"]["assistant_clean_tounsi_rate"] >= CFG.required_sft_assistant_clean_rate
+                and processed_quality["sft_test"]["assistant_clean_tounsi_rate"] >= CFG.required_sft_assistant_clean_rate
+            ),
+            "required_rate": CFG.required_sft_assistant_clean_rate,
+            "processed_quality": {
+                "sft_train": processed_quality["sft_train"],
+                "sft_val": processed_quality["sft_val"],
+                "sft_test": processed_quality["sft_test"],
+            },
+        },
+        {
+            "name": "sft_domain_relevance",
+            "passed": (
+                processed_quality["sft_train"]["domain_relevance_rate"] >= CFG.required_sft_domain_rate
+                and processed_quality["sft_val"]["domain_relevance_rate"] >= CFG.required_sft_domain_rate
+                and processed_quality["sft_test"]["domain_relevance_rate"] >= CFG.required_sft_domain_rate
+            ),
+            "required_rate": CFG.required_sft_domain_rate,
+            "processed_quality": {
+                "sft_train": processed_quality["sft_train"],
+                "sft_val": processed_quality["sft_val"],
+                "sft_test": processed_quality["sft_test"],
+            },
+        },
+        {
+            "name": "sft_eval_splits_deduplicated",
+            "passed": (
+                processed_quality["sft_val"]["duplicate_examples"] == 0
+                and processed_quality["sft_test"]["duplicate_examples"] == 0
+            ),
+            "processed_quality": {
+                "sft_val": processed_quality["sft_val"],
+                "sft_test": processed_quality["sft_test"],
+            },
+        },
+        {
+            "name": "training_flow_linked",
+            "passed": True,
+            "training_flow": _training_flow_summary(),
+        },
+        {
+            "name": "dpo_domain_relevance",
+            "passed": (
+                processed_quality["dpo_train"]["domain_relevance_rate"] >= CFG.required_dpo_domain_rate
+                and processed_quality["dpo_val"]["domain_relevance_rate"] >= CFG.required_dpo_domain_rate
+            ),
+            "required_rate": CFG.required_dpo_domain_rate,
+            "processed_quality": {
+                "dpo_train": processed_quality["dpo_train"],
+                "dpo_val": processed_quality["dpo_val"],
+            },
         },
     ]
     preflight_failing_checks = [check["name"] for check in preflight_checks if not check.get("passed")]
@@ -749,7 +966,9 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         },
         "files": files_summary,
         "training_profile": _training_profile_summary(),
+        "training_flow": _training_flow_summary(),
         "language_coverage": language_coverage,
+        "processed_quality": processed_quality,
         "few_shots": few_shot_stats,
         "commandes_intents": commandes_slot_summary,
         "eval_cases": {
@@ -761,6 +980,7 @@ def validate_domain_assets(write_report: bool = True) -> dict[str, Any]:
         "processed": processed_summary,
         "kb": kb_summary,
         "rag": rag_summary,
+        "rag_artifacts": rag_artifacts,
         "rag_training": rag_training_summary,
         "runtime_storage": runtime_storage,
         "preflight_readiness": preflight_readiness,

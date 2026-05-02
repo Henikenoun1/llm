@@ -29,6 +29,22 @@ from src.tounsi_llm.config import (
 )
 
 
+def _run_preflight_validation() -> dict[str, object]:
+    from src.tounsi_llm.validation import validate_domain_assets
+
+    report = validate_domain_assets(write_report=True)
+    summary = report.get("summary", {})
+    preflight_readiness = report.get("preflight_readiness", {})
+    production_readiness = report.get("production_readiness", {})
+    logger.info("preflight validation summary: %s", summary)
+    logger.info("preflight training readiness: %s", preflight_readiness)
+    logger.info("preflight production readiness: %s", production_readiness)
+    if preflight_readiness.get("go_no_go") != "GO":
+        failing = preflight_readiness.get("failing_checks", [])
+        raise SystemExit(f"Preflight training verdict is NO_GO. failing_checks={failing}")
+    return report
+
+
 def _clear_directory(path: Path, *, preserve_names: set[str] | None = None) -> None:
     preserve_names = preserve_names or set()
     if not path.exists():
@@ -62,17 +78,19 @@ def main() -> None:
             "download",
             "audit",
             "prepare",
+            "rag",
             "validate",
             "self-sup",
             "sft",
             "dpo",
+            "train",
             "promote",
             "eval",
             "serve",
             "all",
             "full",
         ],
-        default="all",
+        default="train",
     )
     parser.add_argument("--max-sft-samples", type=int, default=None)
     parser.add_argument("--max-self-sup-texts", type=int, default=None)
@@ -90,7 +108,11 @@ def main() -> None:
     parser.add_argument("--dpo-epochs", type=int, default=None)
     parser.add_argument("--dpo-max-steps", type=int, default=None)
     parser.add_argument("--dpo-beta", type=float, default=0.1)
-    parser.add_argument("--prod-source-variant", default="sft")
+    parser.add_argument(
+        "--prod-source-variant",
+        default="orpo",
+        help="Adapter variant to promote (for example sft, dpo, v2, v2_dpo) or 'base' for pre-training bootstrap.",
+    )
     parser.add_argument("--host", default="0.0.0.0")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--eval-model-variant", default="prod")
@@ -107,6 +129,7 @@ def main() -> None:
         "download": [_download],
         "audit": [_audit],
         "prepare": [_prepare],
+        "rag": [_rag],
         "validate": [_validate],
         "self-sup": [_self_sup],
         "sft": [_sft],
@@ -114,8 +137,9 @@ def main() -> None:
         "promote": [_promote],
         "eval": [_eval],
         "serve": [_serve],
-        "all": [_download, _audit, _prepare, _self_sup, _sft, _dpo, _promote, _eval, _validate],
-        "full": [_download, _audit, _prepare, _self_sup, _sft, _dpo, _promote, _eval, _validate],
+        "train": [_download, _audit, _prepare, _rag, _self_sup, _sft, _dpo],
+        "all": [_download, _audit, _prepare, _rag, _self_sup, _sft, _dpo, _promote, _eval, _validate],
+        "full": [_download, _audit, _prepare, _rag, _self_sup, _sft, _dpo, _promote, _eval, _validate],
     }
 
     if args.clean_before_run and args.stage != "reset":
@@ -198,6 +222,13 @@ def _prepare(args) -> None:
         )
 
 
+def _rag(args) -> None:
+    from src.tounsi_llm.rag import VectorRAGRetriever
+
+    retriever = VectorRAGRetriever(refresh=True)
+    logger.info("RAG artifacts: %s", retriever.stats())
+
+
 def _validate(args) -> None:
     from src.tounsi_llm.validation import validate_domain_assets
 
@@ -214,6 +245,7 @@ def _validate(args) -> None:
 def _self_sup(args) -> None:
     from src.tounsi_llm.training import train_self_supervised
 
+    _run_preflight_validation()
     metrics = train_self_supervised(
         epochs=args.self_sup_epochs,
         max_steps=args.self_sup_max_steps,
@@ -226,6 +258,7 @@ def _self_sup(args) -> None:
 def _sft(args) -> None:
     from src.tounsi_llm.training import train_sft
 
+    _run_preflight_validation()
     metrics = train_sft(
         epochs=args.sft_epochs,
         max_steps=args.sft_max_steps,
@@ -237,6 +270,7 @@ def _sft(args) -> None:
 def _dpo(args) -> None:
     from src.tounsi_llm.training import train_dpo
 
+    _run_preflight_validation()
     metrics = train_dpo(epochs=args.dpo_epochs, max_steps=args.dpo_max_steps, beta=args.dpo_beta)
     logger.info("dpo metrics: %s", metrics)
 

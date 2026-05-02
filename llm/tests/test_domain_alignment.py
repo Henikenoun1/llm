@@ -53,6 +53,35 @@ class DomainAlignmentTests(unittest.TestCase):
                 self.assertEqual(slots.get("order_id"), "ORD-ABC12345")
                 self.assertEqual(intent, "order_tracking")
 
+    def test_social_check_in_is_classified_as_greeting(self) -> None:
+        for text in ["chhalek", "cv ?", "labes ?"]:
+            with self.subTest(text=text):
+                slots = extract_slots(text)
+                intent = infer_intent(text, extracted_slots=slots)
+                self.assertEqual(intent, "greeting")
+
+    def test_general_agent_queries_get_dedicated_intents(self) -> None:
+        cases = {
+            "chnou lyoum tawa ?": "current_date",
+            "chnou sa3a tawa ?": "current_time",
+            "chelwa9t lyoum ?": "current_time",
+            "chkoun inti ?": "agent_identity",
+            "chnou tnajjem ta3mel ?": "agent_capabilities",
+            "winik taw ?": "agent_location",
+        }
+        for text, expected in cases.items():
+            with self.subTest(text=text):
+                slots = extract_slots(text)
+                intent = infer_intent(text, extracted_slots=slots)
+                self.assertEqual(intent, expected)
+
+    def test_ambiguous_business_opening_prefers_need_clarification(self) -> None:
+        text = "aslema nheb نحكي 3la commande"
+        slots = extract_slots(text)
+        intent = infer_intent(text, extracted_slots=slots)
+
+        self.assertEqual(intent, "clarify_need")
+
     def test_create_order_tool_returns_non_destructive_draft(self) -> None:
         registry = ToolRegistry()
         result = registry.create_order(

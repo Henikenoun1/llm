@@ -7,15 +7,16 @@ NumPy, so the project still works in constrained environments.
 from __future__ import annotations
 
 import csv
-import json
 import io
+import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 import numpy as np
 
-from .config import CFG, DOMAIN_CFG, RAG_DIR, resolve_project_path, logger
+from .config import CFG, DOMAIN_CFG, RAG_ARTIFACTS_DIR, RAG_DIR, resolve_project_path, logger
 
 try:
     import faiss  # type: ignore
@@ -241,6 +242,31 @@ def _chunk_text(text: str, chunk_size: int, overlap: int) -> list[str]:
     return chunks
 
 
+def _source_signature_payload(source_files: list[Path]) -> dict[str, Any]:
+    files_payload = []
+    for path in source_files:
+        stat = path.stat()
+        files_payload.append(
+            {
+                "path": str(path),
+                "size": stat.st_size,
+                "mtime_ns": stat.st_mtime_ns,
+            }
+        )
+    return {
+        "embedding_model": CFG.embedding_model,
+        "chunk_size": CFG.rag_chunk_size,
+        "chunk_overlap": CFG.rag_chunk_overlap,
+        "source_files": files_payload,
+    }
+
+
+def _source_signature(source_files: list[Path]) -> str:
+    payload = _source_signature_payload(source_files)
+    serialized = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 class VectorRAGRetriever:
     def __init__(self, refresh: bool | None = None) -> None:
         self.refresh = CFG.rag_refresh_on_startup if refresh is None else refresh
@@ -248,12 +274,130 @@ class VectorRAGRetriever:
         self.docs: list[RagChunk] = []
         self._matrix: np.ndarray | None = None
         self._index = None
+        self._loaded_from_cache = False
+        self._artifact_dir = RAG_ARTIFACTS_DIR
         if self.refresh:
-            self.build()
+            self.ensure_ready()
 
-    def build(self) -> None:
+    def _artifact_paths(self) -> dict[str, Path]:
+        return {
+            "manifest": self._artifact_dir / "rag_manifest.json",
+            "chunks": self._artifact_dir / "rag_chunks.jsonl",
+            "index": self._artifact_dir / "rag.index",
+            "matrix": self._artifact_dir / "rag_matrix.npy",
+        }
+
+    def _load_cached(self, source_files: list[Path]) -> bool:
+        paths = self._artifact_paths()
+        manifest_path = paths["manifest"]
+        docs_path = paths["chunks"]
+        matrix_path = paths["matrix"]
+        if not manifest_path.exists() or not docs_path.exists() or not matrix_path.exists():
+            return False
+
+        try:
+            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            logger.warning("Invalid RAG manifest, rebuilding index: %s", exc)
+            return False
+
+        expected_signature = _source_signature(source_files)
+        if manifest.get("source_signature") != expected_signature:
+            return False
+
+        loaded_docs: list[RagChunk] = []
+        try:
+            with open(docs_path, encoding="utf-8") as handle:
+                for line in handle:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    loaded_docs.append(
+                        RagChunk(
+                            doc_id=str(row["doc_id"]),
+                            text=str(row["text"]),
+                            source=str(row["source"]),
+                            metadata=row.get("metadata", {}) if isinstance(row.get("metadata"), dict) else {},
+                        )
+                    )
+            self._matrix = np.load(matrix_path).astype("float32")
+        except Exception as exc:
+            logger.warning("Could not load persisted RAG artifacts, rebuilding index: %s", exc)
+            self.docs = []
+            self._matrix = None
+            self._index = None
+            return False
+
+        self.docs = loaded_docs
+        self._index = None
+        if faiss is not None and paths["index"].exists():
+            try:
+                self._index = faiss.read_index(str(paths["index"]))
+            except Exception as exc:
+                logger.warning("Could not load FAISS index, using matrix fallback: %s", exc)
+
+        self.embedding_backend.backend_name = str(
+            manifest.get("embedding_backend") or self.embedding_backend.model_name
+        )
+        self._loaded_from_cache = True
+        logger.info(
+            "Loaded persisted RAG artifacts: %d chunks, backend=%s, faiss=%s",
+            len(self.docs),
+            self.embedding_backend.backend_name,
+            "yes" if self._index is not None else "no",
+        )
+        return True
+
+    def _persist(self, source_files: list[Path]) -> None:
+        if self._matrix is None:
+            return
+        paths = self._artifact_paths()
+        self._artifact_dir.mkdir(parents=True, exist_ok=True)
+
+        with open(paths["chunks"], "w", encoding="utf-8") as handle:
+            for chunk in self.docs:
+                handle.write(
+                    json.dumps(
+                        {
+                            "doc_id": chunk.doc_id,
+                            "text": chunk.text,
+                            "source": chunk.source,
+                            "metadata": chunk.metadata,
+                        },
+                        ensure_ascii=False,
+                    )
+                    + "\n"
+                )
+
+        np.save(paths["matrix"], self._matrix)
+        if faiss is not None and self._index is not None:
+            faiss.write_index(self._index, str(paths["index"]))
+        elif paths["index"].exists():
+            paths["index"].unlink()
+
+        manifest = {
+            "source_signature": _source_signature(source_files),
+            "source_config": _source_signature_payload(source_files),
+            "chunk_count": len(self.docs),
+            "embedding_backend": self.embedding_backend.backend_name,
+            "faiss_enabled": bool(self._index is not None),
+        }
+        paths["manifest"].write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+
+    def ensure_ready(self, force_rebuild: bool = False) -> None:
+        source_files = _iter_domain_source_files()
+        if not force_rebuild and self._load_cached(source_files):
+            return
+        self.build(source_files=source_files)
+
+    def build(self, source_files: list[Path] | None = None) -> None:
+        source_files = source_files or _iter_domain_source_files()
         chunks: list[RagChunk] = []
-        for path in _iter_domain_source_files():
+        for path in source_files:
             for doc_id, text, metadata in _read_text_documents(path):
                 split_chunks = _chunk_text(text, CFG.rag_chunk_size, CFG.rag_chunk_overlap)
                 for idx, chunk in enumerate(split_chunks):
@@ -267,9 +411,11 @@ class VectorRAGRetriever:
                     )
 
         self.docs = chunks
+        self._loaded_from_cache = False
         if not chunks:
             self._matrix = np.zeros((0, 1), dtype="float32")
             self._index = None
+            self._persist(source_files)
             return
 
         embeddings = self.embedding_backend.encode([chunk.text for chunk in chunks])
@@ -281,6 +427,7 @@ class VectorRAGRetriever:
         else:
             self._index = None
 
+        self._persist(source_files)
         logger.info(
             "RAG ready: %d chunks, backend=%s, faiss=%s",
             len(self.docs),
@@ -288,11 +435,25 @@ class VectorRAGRetriever:
             "yes" if self._index is not None else "no",
         )
 
+    def stats(self) -> dict[str, Any]:
+        paths = self._artifact_paths()
+        return {
+            "chunks": len(self.docs),
+            "embedding_backend": self.embedding_backend.backend_name,
+            "faiss_enabled": bool(self._index is not None),
+            "loaded_from_cache": self._loaded_from_cache,
+            "artifact_dir": str(self._artifact_dir),
+            "manifest_exists": paths["manifest"].exists(),
+            "chunks_exists": paths["chunks"].exists(),
+            "faiss_index_exists": paths["index"].exists(),
+            "matrix_exists": paths["matrix"].exists(),
+        }
+
     def search(self, query: str, top_k: int | None = None) -> list[dict[str, Any]]:
         if not query.strip():
             return []
         if self._matrix is None:
-            self.build()
+            self.ensure_ready()
         if self._matrix is None or len(self.docs) == 0:
             return []
 

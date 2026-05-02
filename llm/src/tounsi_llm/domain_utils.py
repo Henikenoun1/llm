@@ -35,6 +35,13 @@ NON_STICKY_INTENTS = {
     "greeting",
     "thanks",
     "get_num_client",
+    "clarify_need",
+    "current_date",
+    "current_time",
+    "current_datetime",
+    "agent_identity",
+    "agent_capabilities",
+    "agent_location",
 }
 
 SLOT_NAME_ALIASES = {
