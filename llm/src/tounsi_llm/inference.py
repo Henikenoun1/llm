@@ -1804,29 +1804,119 @@ def _render_order_tracking_card(tool_result: dict[str, Any], user_context: dict[
     status = _first_non_empty(order.get("statut"), order.get("statutLabel"), tool_result.get("order_status"))
     badge = _status_badge(status)
     created_at = _format_front_date(_first_non_empty(order.get("dateCommande"), tool_result.get("date")))
+    updated_at = _format_front_date(_first_non_empty(order.get("dateDerniereMAJ"), order.get("updatedAt")))
     code_client = _first_non_empty(opticien.get("codeClient"), order.get("codeClient"), tool_result.get("num_client"))
     agence = _first_non_empty(opticien.get("agence"), order.get("agence"), (user_context or {}).get("USER_AGENCE"))
     commerce = _first_non_empty(opticien.get("nomCommerce"), opticien.get("nom"), opticien.get("raisonSociale"), "Opticien")
-    porteur = _first_non_empty(order.get("nomPorteur"), order.get("porteur"), tool_result.get("customer_name"), "N/A")
+    porteur = _first_non_empty(order.get("nomPorteur"), order.get("porteur"), tool_result.get("customer_name"))
     order_type = _first_non_empty(order.get("typeCommande"), tool_result.get("order_type"))
     next_action = _first_non_empty(order.get("nextAction"), tool_result.get("next_action"))
+    quantity = _first_non_empty(order.get("quantity"))
+    indice = _first_non_empty(order.get("indice"))
+    traitement = _first_non_empty(order.get("traitement"))
+    coloration = _first_non_empty(order.get("coloration"))
 
-    lines = [
-        f"📦 **{reference or 'Commande'}** · {badge}",
-        f"*Créée le {created_at}*",
-        "",
-        "**👤 Opticien**",
-        f"{commerce} · Code {code_client or 'N/A'}" + (f" · {agence}" if agence else ""),
-        "",
-        "**🧑 Porteur**",
-        f"Nom : {porteur}",
-    ]
+    delivery_block = _delivery_table(tool_result)
+
+    lines: list[str] = [f"📦 **Commande {reference or '—'}** · {badge}", ""]
+
+    # ── Tableau principal Suivi commande ────────────────────────────────
+    lines.append("| Champ | Valeur |")
+    lines.append("|---|---|")
+    lines.append(f"| Référence | {reference or '—'} |")
+    lines.append(f"| Statut | {badge} |")
     if order_type:
-        lines.extend(["", "**🏭 Verre**", order_type])
-    lines.extend(["", "**📍 Suivi**", f"{badge} ← étape actuelle"])
+        lines.append(f"| Type | {order_type} |")
+    if quantity:
+        lines.append(f"| Quantité | {quantity} |")
+    lines.append(f"| Date création | {created_at} |")
+    if updated_at and updated_at != "N/A":
+        lines.append(f"| Mise à jour | {updated_at} |")
     if next_action:
-        lines.append(f"Prochaine action : {next_action}")
-    lines.extend(["", _role_action_buttons(user_context)])
+        lines.append(f"| Prochaine action | {next_action} |")
+    lines.append("")
+
+    # ── Bloc Verre (si dispo) ──────────────────────────────────────────
+    if any([indice, traitement, coloration]):
+        lines.append("**🏭 Verre**")
+        lines.append("| Indice | Traitement | Coloration |")
+        lines.append("|---|---|---|")
+        lines.append(f"| {indice or '—'} | {traitement or '—'} | {coloration or '—'} |")
+        lines.append("")
+
+    # ── Bloc Opticien ──────────────────────────────────────────────────
+    lines.append("**👤 Opticien**")
+    lines.append("| Code client | Commerce | Agence |")
+    lines.append("|---|---|---|")
+    lines.append(f"| {code_client or '—'} | {commerce or '—'} | {agence or '—'} |")
+    lines.append("")
+
+    # ── Bloc Porteur ───────────────────────────────────────────────────
+    if porteur:
+        lines.append(f"**🧑 Porteur** : {porteur}")
+        lines.append("")
+
+    # ── Bloc Livraison ─────────────────────────────────────────────────
+    if delivery_block:
+        lines.extend(delivery_block)
+        lines.append("")
+
+    lines.append(_role_action_buttons(user_context))
+    return "\n".join(lines).strip()
+
+
+def _delivery_table(tool_result: dict[str, Any]) -> list[str]:
+    """Build a markdown table block describing the delivery schedule, if any."""
+    schedule = tool_result.get("delivery_schedule") if isinstance(tool_result.get("delivery_schedule"), dict) else {}
+    source = schedule if schedule else tool_result
+    agence = _first_non_empty(source.get("agence"))
+    secteur = _first_non_empty(source.get("secteur"))
+    next_slot = _first_non_empty(source.get("next_slot"), source.get("premier_creneau"))
+    eta_days = _first_non_empty(tool_result.get("eta_days"))
+    if not any([agence, secteur, next_slot, eta_days]):
+        return []
+    lines = ["**🚚 Livraison**", "| Agence | Secteur | Créneau |", "|---|---|---|"]
+    creneau = next_slot or (f"~{eta_days} j" if eta_days else "—")
+    lines.append(f"| {agence or '—'} | {secteur or 'Tous les clients'} | {creneau} |")
+    return lines
+
+
+def _render_delivery_schedule_card(
+    tool_result: dict[str, Any],
+    slots: dict[str, Any],
+    user_context: dict[str, str] | None = None,
+) -> str:
+    """Structured markdown card for the delivery_schedule intent."""
+    agence = _first_non_empty(tool_result.get("agence"), slots.get("agence"))
+    secteur = _first_non_empty(tool_result.get("secteur"), slots.get("secteur"))
+    city = _first_non_empty(tool_result.get("city"), slots.get("city"))
+    next_slot = _first_non_empty(tool_result.get("next_slot"), tool_result.get("premier_creneau"))
+    all_slots = tool_result.get("tous_creneaux") or tool_result.get("creneaux") or []
+    if not isinstance(all_slots, list):
+        all_slots = []
+
+    header = "🚚 **Planning livraison**"
+    lines = [header, ""]
+    lines.append("| Champ | Valeur |")
+    lines.append("|---|---|")
+    if agence:
+        lines.append(f"| Agence | {agence} |")
+    if city and city != agence:
+        lines.append(f"| Ville | {city} |")
+    lines.append(f"| Secteur | {secteur or 'Tous les clients'} |")
+    lines.append(f"| Prochain créneau | {next_slot or '—'} |")
+
+    extra_slots = [str(slot) for slot in all_slots if str(slot).strip() and str(slot) != next_slot]
+    if extra_slots:
+        lines.append("")
+        lines.append("**Autres créneaux**")
+        lines.append("| # | Créneau |")
+        lines.append("|---|---|")
+        for idx, slot in enumerate(extra_slots[:5], start=1):
+            lines.append(f"| {idx} | {slot} |")
+
+    lines.append("")
+    lines.append("_Fenêtre approximative — sous réserve de planning agence._")
     return "\n".join(lines).strip()
 
 
@@ -2317,6 +2407,10 @@ def _render_controlled_response(
                         + "Ama ma najjemch n2akked men tawa ken hedha lyoum wala nhar e5er, khater hedhi teb9a fenetre ta9ribiya moch confirmation nehaiya."
                     ),
                 )
+            if isinstance(tool_result, dict):
+                card = _render_delivery_schedule_card(tool_result, slots, user_context=user_context)
+                if card:
+                    return card
             delivery = _delivery_phrase(tool_result, target_script)
             return delivery or _script_text(
                 target_script,
@@ -2793,7 +2887,40 @@ def production_infer(
     if intent == "get_num_client" and not slots.get("num_client"):
         missing_slots = ["num_client"]
     auto_execute_tool = _should_execute_tool_for_mode(intent, missing_slots, runtime_mode)
-    tool_result = tool_registry.execute(tool_name, tool_args, context=normalized_user_context) if tool_name and auto_execute_tool else None
+
+    # ── OptiFlow agent override ───────────────────────────────────────────
+    # When the LLM intent matches a canonical OptiFlow tool AND the request
+    # carries a backend_url (and a token if needed), call the real Nest API
+    # instead of the local KB. Falls back transparently when not applicable.
+    tool_result = None
+    optiflow_used = False
+    try:
+        from .optiflow_agent import run_optiflow_agent_step  # local import: optional dep
+
+        optiflow_step = run_optiflow_agent_step(
+            intent=intent,
+            slots=slots,
+            user_context=normalized_user_context,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("OptiFlow agent step failed: %s", exc)
+        optiflow_step = None
+
+    if optiflow_step is not None:
+        optiflow_used = True
+        tool_call_override = optiflow_step.get("tool_call") or {}
+        tool_name = tool_call_override.get("name") or tool_name
+        tool_args = tool_call_override.get("arguments") or tool_args
+        if optiflow_step.get("missing"):
+            missing_slots = list(dict.fromkeys([*missing_slots, *optiflow_step["missing"]]))
+            auto_execute_tool = False
+        tool_result = optiflow_step.get("tool_result")
+
+    if not optiflow_used:
+        tool_result = (
+            tool_registry.execute(tool_name, tool_args, context=normalized_user_context)
+            if tool_name and auto_execute_tool else None
+        )
     if isinstance(tool_result, dict):
         tool_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
         if tool_missing:

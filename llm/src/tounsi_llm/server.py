@@ -64,6 +64,11 @@ class ChatRequest(BaseModel):
     model_variant: str = "prod"
     runtime_mode: str | None = None
     user_context: dict[str, Any] = Field(default_factory=dict)
+    # Extensions OptiFlow: prompt système ReAct + credentials/URL pour le tool-calling.
+    system: str | None = None
+    access_token: str | None = None
+    backend_url: str | None = None
+    available_tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -183,6 +188,19 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
     assert _correction_store is not None
 
     history = _memory_store.get_session_history(req.session_id)
+
+    # Merge OptiFlow extensions into user_context so downstream code (tool execution,
+    # prompt placeholders) sees ACCESS_TOKEN / BACKEND_URL / SYSTEM_PROMPT consistently.
+    merged_user_context: dict[str, Any] = dict(req.user_context or {})
+    if req.access_token:
+        merged_user_context.setdefault("access_token", req.access_token)
+    if req.backend_url:
+        merged_user_context.setdefault("backend_url", req.backend_url)
+    if req.system:
+        merged_user_context.setdefault("system_prompt", req.system)
+    if req.available_tools:
+        merged_user_context.setdefault("available_tools", req.available_tools)
+
     result = production_infer(
         user_text=req.message,
         retriever=_retriever,
@@ -190,7 +208,7 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
         session_id=req.session_id,
         model_variant=req.model_variant,
         runtime_mode=req.runtime_mode,
-        user_context=req.user_context,
+        user_context=merged_user_context,
         memory_store=_memory_store,
         tool_registry=_tool_registry,
         correction_store=_correction_store,
