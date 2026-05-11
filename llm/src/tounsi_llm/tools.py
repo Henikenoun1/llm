@@ -18,6 +18,7 @@ from typing import Any, Callable
 
 from .config import CONFIG_DIR, DOMAIN_CFG, KB_DIR, logger, resolve_project_path
 from .domain_utils import canonicalize_intent, canonicalize_slots
+from .optiflow_backend import track_order_from_optiflow_backend
 from .rag_assets import load_delivery_rag_entries, load_lens_rag_entries, next_time_slot_after, normalize_lookup
 
 
@@ -434,7 +435,13 @@ class ToolRegistry:
             )
         return tools
 
-    def execute(self, name: str | None, args: dict[str, Any] | None = None) -> dict[str, Any] | None:
+    def execute(
+        self,
+        name: str | None,
+        args: dict[str, Any] | None = None,
+        *,
+        context: dict[str, Any] | None = None,
+    ) -> dict[str, Any] | None:
         if not name:
             return None
         tool = self._tools.get(name)
@@ -447,6 +454,11 @@ class ToolRegistry:
                 parameter.kind == inspect.Parameter.VAR_KEYWORD
                 for parameter in signature.parameters.values()
             )
+            if context and not accepts_var_kwargs:
+                if "access_token" in signature.parameters and context.get("ACCESS_TOKEN"):
+                    provided_args["access_token"] = context["ACCESS_TOKEN"]
+                if "backend_url" in signature.parameters and context.get("BACKEND_URL"):
+                    provided_args["backend_url"] = context["BACKEND_URL"]
             if accepts_var_kwargs:
                 filtered_args = provided_args
             else:
@@ -520,11 +532,28 @@ class ToolRegistry:
         secteur: str | None = None,
         requested_slot: str | None = None,
         delivery_slot: str | None = None,
+        access_token: str | None = None,
+        backend_url: str | None = None,
     ) -> dict[str, Any]:
         slots = canonicalize_slots({"num_client": num_client, "order_id": order_id, "priority": priority})
         order_id = str(slots.get("order_id", ""))
         num_client = str(slots.get("num_client", ""))
         priority = slots.get("priority")
+
+        backend_result = track_order_from_optiflow_backend(
+            num_client=num_client,
+            order_id=order_id,
+            priority=priority,
+            agence=agence,
+            city=city,
+            secteur=secteur,
+            requested_slot=requested_slot,
+            delivery_slot=delivery_slot,
+            access_token=access_token,
+            backend_url=backend_url,
+        )
+        if backend_result is not None:
+            return backend_result
 
         def attach_delivery_context(result: dict[str, Any], *, city_hint: str | None = None) -> dict[str, Any]:
             schedule = self.get_delivery_schedule(

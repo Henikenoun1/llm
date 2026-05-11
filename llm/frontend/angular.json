@@ -95,7 +95,10 @@
             "host": "0.0.0.0",
             "proxyConfig": "proxy.conf.json",
             "allowedHosts": [
-              ".devtunnels.ms"
+              ".devtunnels.ms",
+              ".lhr.life",
+              ".loca.lt",
+              ".trycloudflare.com"
             ]
           }
         }

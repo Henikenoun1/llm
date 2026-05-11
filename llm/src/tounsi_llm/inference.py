@@ -11,6 +11,8 @@ from __future__ import annotations
 
 from datetime import datetime
 import json
+import os
+from pathlib import Path
 import random
 import re
 import threading
@@ -81,6 +83,53 @@ _ARABIZI_STYLE_MARKERS = {
     "3lech",
     "ya3tik",
     "3aychek",
+}
+
+_FRENCH_STYLE_MARKERS = {
+    "bonjour",
+    "bonsoir",
+    "salut",
+    "merci",
+    "commande",
+    "commandes",
+    "statut",
+    "reference",
+    "référence",
+    "suivi",
+    "client",
+    "opticien",
+    "porteur",
+    "verre",
+    "verres",
+    "mes",
+    "mon",
+    "ma",
+    "vos",
+    "votre",
+    "avec",
+    "pour",
+    "pouvez",
+    "peux",
+    "trouve",
+    "trouver",
+    "afficher",
+    "détail",
+    "detail",
+    "tableau",
+    "bord",
+}
+
+_FRENCH_STRONG_MARKERS = {
+    "bonjour",
+    "bonsoir",
+    "s'il vous plait",
+    "s il vous plait",
+    "pouvez vous",
+    "mes commandes",
+    "mon résumé",
+    "mon resume",
+    "tableau de bord",
+    "suivi de commande",
 }
 
 _TOPIC_RESET_MARKERS = [
@@ -387,6 +436,23 @@ def _detect_script_like(text: str) -> str:
     return "other"
 
 
+def _looks_like_french_text(text: str) -> bool:
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return False
+    tokens = set(normalized.split())
+    if tokens & _ARABIZI_STYLE_MARKERS:
+        return False
+    if any(marker in normalized for marker in _FRENCH_STRONG_MARKERS):
+        return True
+    score = 0
+    for marker in _FRENCH_STYLE_MARKERS:
+        marker_norm = _norm_for_matching(marker)
+        if marker_norm in tokens or marker_norm in normalized:
+            score += 1
+    return score >= 2
+
+
 def _has_text_signal(text: str, phrases: list[str]) -> bool:
     normalized = _norm_for_matching(text)
     if not normalized:
@@ -583,6 +649,8 @@ def _should_preserve_open_task_state(intent: str, session_state: dict[str, Any] 
 def _preferred_response_script(user_text: str) -> str:
     detected = _detect_script_like(user_text)
     if detected in {"arabizi", "latin"}:
+        if _looks_like_french_text(user_text):
+            return "french"
         return "arabizi"
     if detected == "arabic":
         return "arabic"
@@ -592,6 +660,12 @@ def _preferred_response_script(user_text: str) -> str:
 
 
 def _script_instruction(target_script: str) -> str:
+    if target_script == "french":
+        return (
+            "Réponds en français naturel et professionnel. Utilise un format frontend lisible: phrases courtes, "
+            "titres en gras, tableaux Markdown quand il y a plusieurs commandes, et badges statut exacts. "
+            "Ne bascule pas en arabizi ou arabe si le message utilisateur est en français."
+        )
     if target_script == "arabizi":
         return (
             "Reply in Tunisian Arabizi (Latin script) with a professional call-center tone. "
@@ -608,6 +682,22 @@ def _script_instruction(target_script: str) -> str:
     )
 
 
+def _prompt_config_text(value: Any) -> str:
+    if isinstance(value, dict):
+        prompt_file = value.get("file") or value.get("path")
+        if prompt_file:
+            path = Path(str(prompt_file))
+            if not path.is_absolute():
+                path = CONFIG_DIR / path
+            try:
+                return path.read_text(encoding="utf-8").strip()
+            except Exception as exc:  # pragma: no cover - depends on local files
+                logger.warning("Could not load system prompt file %s: %s", path, exc)
+                return ""
+        return str(value.get("text", "") or "").strip()
+    return str(value or "").strip()
+
+
 def _configured_system_prompts() -> dict[str, str]:
     prompts = DOMAIN_CFG.get("system_prompts", {})
     if not isinstance(prompts, dict):
@@ -615,7 +705,7 @@ def _configured_system_prompts() -> dict[str, str]:
 
     normalized: dict[str, str] = {}
     for key, value in prompts.items():
-        text = str(value or "").strip()
+        text = _prompt_config_text(value)
         if not text:
             continue
         normalized_key = str(key).strip().lower().replace("-", "_")
@@ -626,6 +716,8 @@ def _configured_system_prompts() -> dict[str, str]:
 def _select_prompt_style(user_script: str, target_script: str) -> str:
     if user_script == "mixed":
         return "code_switch"
+    if target_script == "french":
+        return "french"
     if target_script == "arabizi":
         return "arabizi"
     if user_script == "arabic":
@@ -633,9 +725,70 @@ def _select_prompt_style(user_script: str, target_script: str) -> str:
     return "default"
 
 
-def _resolve_system_prompt_messages(*, user_script: str, target_script: str, intent: str) -> list[str]:
+_USER_CONTEXT_ALIASES = {
+    "USER_ID": ["USER_ID", "user_id", "id"],
+    "USER_PRENOM": ["USER_PRENOM", "user_prenom", "prenom", "firstName", "first_name"],
+    "USER_NOM": ["USER_NOM", "user_nom", "nom", "lastName", "last_name"],
+    "USER_ROLE": ["USER_ROLE", "user_role", "role"],
+    "USER_CODE_CLIENT": ["USER_CODE_CLIENT", "user_code_client", "codeClient", "code_client", "num_client"],
+    "USER_AGENCE": ["USER_AGENCE", "user_agence", "agence", "agency"],
+    "ACCESS_TOKEN": ["ACCESS_TOKEN", "access_token", "accessToken", "token"],
+    "BACKEND_URL": ["BACKEND_URL", "backend_url", "backendUrl"],
+}
+
+
+def _normalize_user_context(user_context: dict[str, Any] | None) -> dict[str, str]:
+    raw = user_context if isinstance(user_context, dict) else {}
+    normalized: dict[str, str] = {}
+    for canonical, aliases in _USER_CONTEXT_ALIASES.items():
+        value = None
+        for alias in aliases:
+            if raw.get(alias) not in (None, ""):
+                value = raw.get(alias)
+                break
+        if value not in (None, ""):
+            normalized[canonical] = str(value).strip()
+
+    normalized.setdefault("USER_ROLE", "OPTICIEN")
+    backend_url = normalized.get("BACKEND_URL") or os.getenv("OPTIFLOW_BACKEND_BASE_URL", "")
+    normalized["BACKEND_URL"] = backend_url.rstrip("/")
+    return normalized
+
+
+def _prompt_placeholders(user_context: dict[str, str]) -> dict[str, str]:
+    values = {key: str(user_context.get(key, "")) for key in _USER_CONTEXT_ALIASES}
+    if values.get("ACCESS_TOKEN"):
+        values["ACCESS_TOKEN"] = "***"
+    return values
+
+
+def _apply_prompt_placeholders(text: str, user_context: dict[str, str]) -> str:
+    for key, value in _prompt_placeholders(user_context).items():
+        text = text.replace("{" + key + "}", value)
+    return text
+
+
+def _apply_user_context_to_slots(intent: str, slots: dict[str, Any], user_context: dict[str, str]) -> dict[str, Any]:
+    slots = canonicalize_slots(slots)
+    role = str(user_context.get("USER_ROLE", "OPTICIEN")).upper()
+    if canonicalize_intent(intent) in {"order_tracking", "create_order", "order_creation"}:
+        if role == "OPTICIEN" and not slots.get("num_client") and user_context.get("USER_CODE_CLIENT"):
+            slots["num_client"] = user_context["USER_CODE_CLIENT"]
+        if not slots.get("agence") and user_context.get("USER_AGENCE"):
+            slots["agence"] = user_context["USER_AGENCE"]
+    return slots
+
+
+def _resolve_system_prompt_messages(
+    *,
+    user_script: str,
+    target_script: str,
+    intent: str,
+    user_context: dict[str, str] | None = None,
+) -> list[str]:
     configured = _configured_system_prompts()
-    prompt_keys = ["default", _select_prompt_style(user_script, target_script)]
+    normalized_context = user_context or {}
+    prompt_keys = ["optiflow_order_tracking", "default", _select_prompt_style(user_script, target_script)]
 
     if intent in {
         "create_order",
@@ -653,13 +806,13 @@ def _resolve_system_prompt_messages(*, user_script: str, target_script: str, int
     for key in prompt_keys:
         text = str(configured.get(key, "")).strip()
         if text and text not in seen:
-            resolved.append(text)
+            resolved.append(_apply_prompt_placeholders(text, normalized_context))
             seen.add(text)
 
     for fallback in [DOMAIN_CFG.get("system_prompt", ""), DOMAIN_CFG.get("humanized_prompt", "")]:
         text = str(fallback or "").strip()
         if text and text not in seen:
-            resolved.append(text)
+            resolved.append(_apply_prompt_placeholders(text, normalized_context))
             seen.add(text)
 
     return resolved
@@ -669,6 +822,8 @@ def _is_script_mismatch(text: str, target_script: str) -> bool:
     normalized = normalize_text(text)
     if len(normalized.split()) < 4:
         return False
+    if target_script == "french":
+        return bool(_ARABIC_CHAR_RE.search(normalized)) and not _looks_like_french_text(normalized)
     has_arabic = bool(_ARABIC_CHAR_RE.search(normalized))
     has_latin = bool(_LATIN_CHAR_RE.search(normalized))
     if target_script == "arabizi":
@@ -1497,13 +1652,36 @@ _STATUS_LABELS_LATIN = {
     "PENDING": "en attente",
 }
 
+_STATUS_BADGES = {
+    "BROUILLON": "📝 Brouillon",
+    "DRAFT": "📝 Brouillon",
+    "CREEE": "✅ Créée",
+    "CREATED": "✅ Créée",
+    "EN_ATTENTE": "⏳ En attente",
+    "PENDING": "⏳ En attente",
+    "EN_COURS": "⚙️ En cours",
+    "EN_FABRICATION": "⚙️ En cours",
+    "PROCESSING": "⚙️ En cours",
+    "VALIDEE": "✔️ Validée",
+    "VALIDATED": "✔️ Validée",
+    "REJETEE": "❌ Rejetée",
+    "REJECTED": "❌ Rejetée",
+    "LIVREE": "🚚 Livrée",
+    "DELIVERED": "🚚 Livrée",
+    "SHIPPED": "🚚 Livrée",
+    "ANNULEE": "🚫 Annulée",
+    "CANCELLED": "🚫 Annulée",
+}
 
-def _script_text(target_script: str, *, arabic: str, latin: str) -> str:
+
+def _script_text(target_script: str, *, arabic: str, latin: str, french: str | None = None) -> str:
+    if target_script == "french":
+        return french if french is not None else latin
     return latin if target_script == "arabizi" else arabic
 
 
 def _slot_label(slot: str, target_script: str) -> str:
-    labels = _SLOT_LABELS_LATIN if target_script == "arabizi" else _SLOT_LABELS_AR
+    labels = _SLOT_LABELS_LATIN if target_script in {"arabizi", "french"} else _SLOT_LABELS_AR
     return labels.get(slot, slot.replace("_", " "))
 
 
@@ -1514,10 +1692,10 @@ def _natural_join(items: list[str], target_script: str) -> str:
     if len(values) == 1:
         return values[0]
     if len(values) == 2:
-        joiner = " w " if target_script == "arabizi" else " و "
+        joiner = " et " if target_script == "french" else (" w " if target_script == "arabizi" else " و ")
         return f"{values[0]}{joiner}{values[1]}"
     separator = ", "
-    tail_joiner = " w " if target_script == "arabizi" else " و "
+    tail_joiner = " et " if target_script == "french" else (" w " if target_script == "arabizi" else " و ")
     return f"{separator.join(values[:-1])}{tail_joiner}{values[-1]}"
 
 
@@ -1572,7 +1750,7 @@ def _format_slots_recap(slots: dict[str, Any], target_script: str) -> str:
 
 def _status_label(status: str | None, target_script: str) -> str:
     normalized = str(status or "").strip().upper()
-    labels = _STATUS_LABELS_LATIN if target_script == "arabizi" else _STATUS_LABELS_AR
+    labels = _STATUS_LABELS_LATIN if target_script in {"arabizi", "french"} else _STATUS_LABELS_AR
     return labels.get(normalized, str(status or "").strip() or "en attente")
 
 
@@ -1582,6 +1760,74 @@ def _first_non_empty(*values: Any) -> str:
         if rendered:
             return rendered
     return ""
+
+
+def _status_badge(status: str | None) -> str:
+    normalized = str(status or "").strip().upper().replace(" ", "_").replace("-", "_")
+    return _STATUS_BADGES.get(normalized, str(status or "").strip() or "⏳ En attente")
+
+
+def _format_front_date(value: Any) -> str:
+    text = _format_scalar(value)
+    if not text:
+        return "N/A"
+    candidate = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+        return parsed.strftime("%d/%m/%Y à %H:%M")
+    except ValueError:
+        return text
+
+
+def _role_action_buttons(user_context: dict[str, str] | None) -> str:
+    role = str((user_context or {}).get("USER_ROLE") or "OPTICIEN").upper()
+    if role == "ADMIN":
+        return "[🔄 Actualiser] [✏️ Changer statut] [📊 Dashboard]"
+    if role in {"OPERATEUR", "AGENT"}:
+        return "[🔄 Actualiser] [✏️ Changer statut] [👤 Fiche client]"
+    return "[🔄 Actualiser] [📋 Mes commandes] [📞 Support]"
+
+
+def _backend_order_payload(tool_result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(tool_result, dict):
+        return {}
+    backend_result = tool_result.get("backend_result")
+    if isinstance(backend_result, dict) and isinstance(backend_result.get("order"), dict):
+        return backend_result["order"]
+    return {}
+
+
+def _render_order_tracking_card(tool_result: dict[str, Any], user_context: dict[str, str] | None = None) -> str:
+    order = _backend_order_payload(tool_result)
+    opticien = order.get("opticien") if isinstance(order.get("opticien"), dict) else {}
+    reference = _first_non_empty(order.get("numCmd"), order.get("reference"), tool_result.get("order_id"))
+    status = _first_non_empty(order.get("statut"), order.get("statutLabel"), tool_result.get("order_status"))
+    badge = _status_badge(status)
+    created_at = _format_front_date(_first_non_empty(order.get("dateCommande"), tool_result.get("date")))
+    code_client = _first_non_empty(opticien.get("codeClient"), order.get("codeClient"), tool_result.get("num_client"))
+    agence = _first_non_empty(opticien.get("agence"), order.get("agence"), (user_context or {}).get("USER_AGENCE"))
+    commerce = _first_non_empty(opticien.get("nomCommerce"), opticien.get("nom"), opticien.get("raisonSociale"), "Opticien")
+    porteur = _first_non_empty(order.get("nomPorteur"), order.get("porteur"), tool_result.get("customer_name"), "N/A")
+    order_type = _first_non_empty(order.get("typeCommande"), tool_result.get("order_type"))
+    next_action = _first_non_empty(order.get("nextAction"), tool_result.get("next_action"))
+
+    lines = [
+        f"📦 **{reference or 'Commande'}** · {badge}",
+        f"*Créée le {created_at}*",
+        "",
+        "**👤 Opticien**",
+        f"{commerce} · Code {code_client or 'N/A'}" + (f" · {agence}" if agence else ""),
+        "",
+        "**🧑 Porteur**",
+        f"Nom : {porteur}",
+    ]
+    if order_type:
+        lines.extend(["", "**🏭 Verre**", order_type])
+    lines.extend(["", "**📍 Suivi**", f"{badge} ← étape actuelle"])
+    if next_action:
+        lines.append(f"Prochaine action : {next_action}")
+    lines.extend(["", _role_action_buttons(user_context)])
+    return "\n".join(lines).strip()
 
 
 def _primary_match_from_result(tool_result: dict[str, Any] | None) -> dict[str, Any]:
@@ -1743,8 +1989,23 @@ def _missing_slot_prompt(slot: str, target_script: str) -> str:
         "og_values_or_confirmation": "Thabetli valeurs OG men fadhlik, wala 9olli ken ma famech.",
         "od_values_or_confirmation": "Thabetli valeurs OD men fadhlik, wala 9olli ken ma famech.",
     }
-    prompts = prompts_latin if target_script == "arabizi" else prompts_ar
-    return prompts.get(slot, _script_text(target_script, arabic=f"يلزمني {_slot_label(slot, target_script)} باش نكمل.", latin=f"Yelzemni {_slot_label(slot, target_script)} bach nkammel."))
+    prompts_fr = {
+        "num_client": "Votre code client est absent de la session. Reconnectez-vous ou vérifiez votre profil.",
+        "order_id": "Indiquez la référence ou le bon de commande à vérifier.",
+        "product": "Quel produit voulez-vous commander exactement ?",
+        "reference": "Indiquez la référence à vérifier.",
+        "agence": "Indiquez l'agence ou la ville pour vérifier la livraison.",
+    }
+    prompts = prompts_fr if target_script == "french" else (prompts_latin if target_script == "arabizi" else prompts_ar)
+    return prompts.get(
+        slot,
+        _script_text(
+            target_script,
+            arabic=f"يلزمني {_slot_label(slot, target_script)} باش نكمل.",
+            latin=f"Yelzemni {_slot_label(slot, target_script)} bach nkammel.",
+            french=f"Il me manque {_slot_label(slot, target_script)} pour continuer.",
+        ),
+    )
 
 
 def _topic_reset_response(target_script: str) -> str:
@@ -1818,6 +2079,7 @@ def _render_controlled_response(
     auto_execute_tool: bool,
     runtime_mode: str,
     target_script: str,
+    user_context: dict[str, str] | None = None,
 ) -> str | None:
     intent = canonicalize_intent(intent)
     slots = canonicalize_slots(slots)
@@ -1825,16 +2087,28 @@ def _render_controlled_response(
     recap = _format_slots_recap(tool_result if isinstance(tool_result, dict) else slots, target_script) or _format_slots_recap(slots, target_script)
 
     if intent == "greeting":
+        first_name = _first_non_empty((user_context or {}).get("USER_PRENOM"))
+        last_name = _first_non_empty((user_context or {}).get("USER_NOM"))
+        if first_name and len(normalize_text(user_text).split()) < 5:
+            full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+            return _script_text(
+                target_script,
+                arabic=f"أهلا {first_name} 👋 كيفاش نجم نعاونك ؟",
+                latin=f"Salut {first_name} 👋 Chnowa najjem na3mellek?",
+                french=f"Bonjour M. {full_name} 👋\nComment puis-je vous aider avec vos commandes ?",
+            )
         if _is_social_check_in(user_text):
             return _script_text(
                 target_script,
                 arabic="لاباس الحمد لله، يعطيك الصحة. قولي توة شنية نجم نعاونك فيه؟",
                 latin="Labes hamdoullah, ya3tik essa7a. 9olli tawa chnia najem n3awnek fih?",
+                french="Je vais bien, merci. Comment puis-je vous aider avec vos commandes ?",
             )
         return _script_text(
             target_script,
             arabic="عسلامة، مرحبا بيك. قولي شنية نجم نعاونك فيه اليوم؟",
             latin="Aslema, marhbe bik. 9olli chnia najem n3awnek fih lyoum?",
+            french="Bonjour 👋 Comment puis-je vous aider avec vos commandes ?",
         )
     if intent == "clarify_need":
         return _script_text(
@@ -1922,12 +2196,15 @@ def _render_controlled_response(
     if intent == "order_tracking":
         order_id = _first_non_empty(tool_result.get("order_id") if isinstance(tool_result, dict) else None, slots.get("order_id"))
         if tool_status == "ok":
+            if isinstance(tool_result, dict):
+                return _render_order_tracking_card(tool_result, user_context=user_context)
             status_label = _status_label(tool_result.get("order_status"), target_script)
             delivery = _delivery_phrase(tool_result, target_script)
             response = _script_text(
                 target_script,
                 arabic=f"ثبتّ الطلبية {order_id}. حالتها توة {status_label}.",
                 latin=f"Thabbet el commande {order_id}. 7aletha taw {status_label}.",
+                french=f"J'ai vérifié la commande {order_id}. Son statut actuel est {status_label}.",
             )
             if delivery:
                 response = f"{response} {delivery}."
@@ -1937,17 +2214,27 @@ def _render_controlled_response(
                 target_script,
                 arabic="رقم الحريف ما يطابقش الطلبية هاذي. ثبتلي num client ولا bon de commande من جديد.",
                 latin="Num client ma ytetabe9ch m3a hedhi el commande. Thabetli num client wala bon de commande men jdid.",
+                french="Cette commande n'appartient pas au code client fourni. Vérifiez la référence ou reconnectez-vous avec le bon compte.",
             )
         if tool_status == "not_found":
             return _script_text(
                 target_script,
                 arabic="ما لقيتش الطلبية بهالمعطيات. ثبتلي num client و bon de commande من فضلك.",
                 latin="Ma l9itech el commande bel ma3tiyet hedhom. Thabetli num client w bon de commande men fadhlik.",
+                french=f"Commande introuvable ou accès non autorisé{f' pour **{order_id}**' if order_id else ''}.",
+            )
+        if tool_status == "error" and isinstance(tool_result, dict) and tool_result.get("message"):
+            return _script_text(
+                target_script,
+                arabic="صار مشكل تقني في التثبت من الطلبية. جرّب بعد شوية.",
+                latin="Saret mochkla technique fi verification commande. Jarreb ba3d chweya.",
+                french=str(tool_result.get("message")),
             )
         return _script_text(
             target_script,
             arabic="نجم نتثبت على الطلبية، أما توا ما عنديش نتيجة مؤكدة. ثبتلي المعطيات من فضلك.",
             latin="Najjem nthabet 3al commande, ama tawa ma 3andich natija m2akkda. Thabetli el ma3tiyet men fadhlik.",
+            french="Je peux vérifier la commande, mais je n'ai pas encore de résultat confirmé. Vérifiez la référence puis réessayez.",
         )
 
     if intent in {"create_order", "order_creation"}:
@@ -2331,7 +2618,7 @@ def _scrub_pii(text: str, slots: dict[str, Any]) -> str:
 
 
 def _strip_leaked_english(text: str, target_script: str) -> str:
-    if target_script in {"arabizi", "mixed"}:
+    if target_script in {"arabizi", "mixed", "french"}:
         return text.strip()
 
     allowed = {"sivo", "dt", "indice", "progressive", "photochromic", "index"}
@@ -2415,6 +2702,7 @@ def production_infer(
     session_id: str | None = None,
     model_variant: str = "prod",
     runtime_mode: str | None = None,
+    user_context: dict[str, Any] | None = None,
     memory_store: ConversationMemoryStore | None = None,
     tool_registry: ToolRegistry | None = None,
     correction_store: LiveCorrectionStore | None = None,
@@ -2422,6 +2710,7 @@ def production_infer(
     start = time.perf_counter()
     tool_registry = tool_registry or get_tool_registry()
     history = history or []
+    normalized_user_context = _normalize_user_context(user_context)
     runtime_mode = _resolve_runtime_mode(runtime_mode)
     user_script = _detect_script_like(user_text)
     target_script = _preferred_response_script(user_text)
@@ -2435,6 +2724,7 @@ def production_infer(
         extracted_slots = _merge_slots(extracted_slots, recovered_slots)
     raw_intent = infer_intent(text, extracted_slots=extracted_slots)
     intent, slots, clear_task_state = _resolve_turn_state(text, raw_intent, extracted_slots, session_state)
+    slots = _apply_user_context_to_slots(intent, slots, normalized_user_context)
     state_summary = _summarize_session_state(session_state)
     rag_results: list[dict[str, Any]] = []
     try:
@@ -2503,7 +2793,7 @@ def production_infer(
     if intent == "get_num_client" and not slots.get("num_client"):
         missing_slots = ["num_client"]
     auto_execute_tool = _should_execute_tool_for_mode(intent, missing_slots, runtime_mode)
-    tool_result = tool_registry.execute(tool_name, tool_args) if tool_name and auto_execute_tool else None
+    tool_result = tool_registry.execute(tool_name, tool_args, context=normalized_user_context) if tool_name and auto_execute_tool else None
     if isinstance(tool_result, dict):
         tool_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
         if tool_missing:
@@ -2555,6 +2845,7 @@ def production_infer(
             auto_execute_tool=auto_execute_tool,
             runtime_mode=runtime_mode,
             target_script=target_script,
+            user_context=normalized_user_context,
         )
         if controlled_response:
             response = controlled_response
@@ -2565,6 +2856,7 @@ def production_infer(
                 user_script=user_script,
                 target_script=target_script,
                 intent=intent,
+                user_context=normalized_user_context,
             ):
                 messages.append({"role": "system", "content": prompt})
             messages.extend(
@@ -2681,6 +2973,6 @@ def production_infer(
         "runtime_mode": runtime_mode,
         "response_source": response_source,
         "response_script_target": target_script,
-        "response_script_detected": _detect_script_like(response),
+        "response_script_detected": "french" if target_script == "french" and _looks_like_french_text(response) else _detect_script_like(response),
         "correction_applied": correction_applied,
     }

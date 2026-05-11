@@ -97,7 +97,7 @@
               @for (message of messages(); track message.timestamp) {
                 <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
                   <button type="button" class="bubble" [class.selected]="selectedMessage() === message" (click)="selectMessage(message)">
-                    <div class="message-text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'">{{ message.text }}</div>
+                    <div class="message-text" [dir]="message.text.match('[\u0600-\u06FF]') ? 'rtl' : 'ltr'" [innerHTML]="renderMessageText(message.text)"></div>
                     @if (message.meta) {
                       <div class="meta-row">
                         <span>{{ message.meta.intent }}</span>
@@ -168,7 +168,7 @@
               @for (message of recommendationMessages(); track message.timestamp) {
                 <article class="message" [class.user]="message.role === 'user'" [class.assistant]="message.role === 'assistant'" [class.system]="message.role === 'system'">
                   <button type="button" class="bubble" [class.selected]="selectedMessage() === message" (click)="selectMessage(message)">
-                    <div class="message-text">{{ message.text }}</div>
+                    <div class="message-text" [innerHTML]="renderMessageText(message.text)"></div>
                     @if (message.meta?.missingFields?.length) {
                       <div class="meta-row">
                         <span>missing: {{ message.meta?.missingFields?.length }}</span>

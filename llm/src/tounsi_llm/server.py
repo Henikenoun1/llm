@@ -7,7 +7,7 @@ from typing import Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from .corrections import LiveCorrectionStore
 from .config import CFG, DOMAIN_CFG, RUNTIME, logger
@@ -63,6 +63,7 @@ class ChatRequest(BaseModel):
     session_id: str
     model_variant: str = "prod"
     runtime_mode: str | None = None
+    user_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class ChatResponse(BaseModel):
@@ -189,6 +190,7 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
         session_id=req.session_id,
         model_variant=req.model_variant,
         runtime_mode=req.runtime_mode,
+        user_context=req.user_context,
         memory_store=_memory_store,
         tool_registry=_tool_registry,
         correction_store=_correction_store,
