@@ -25,6 +25,7 @@ import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
 
 from .corrections import LiveCorrectionStore
+from .presidio_layer import presidio_filter
 from .config import ADAPTERS_DIR, CFG, CONFIG_DIR, DOMAIN_CFG, FEW_SHOTS_CFG, logger
 from .domain_utils import canonicalize_intent, canonicalize_slots, words_to_number
 from .memory import ConversationMemoryStore
@@ -187,23 +188,89 @@ _SOCIAL_CHECK_IN_MARKERS = [
     "cv",
     "ca va",
     "ça va",
+    "comment ca va",
+    "comment ça va",
     "chhalek",
     "chehalek",
     "ch7alek",
+    "ch halek",
+    "ch 7alek",
     "kifek",
-    "kifek",
+    "kif rak",
     "kif inti",
+    "kifech rak",
+    "kifach rak",
     "labes",
     "lebes",
     "lbes",
+    "labess",
+    "labas",
     "chnahwelk",
     "chn7walek",
     "كيفاش لاباس",
     "شنحوالك",
     "شنو احوالك",
     "كيف حالك",
+    "كيفاش حالك",
+    "كيفك",
     "لاباس",
+    "لاباس عليك",
 ]
+
+_TIME_OF_DAY_GREETING_MARKERS: dict[str, list[str]] = {
+    "morning": [
+        "sba7 lkhir",
+        "sba7 el khir",
+        "sba7 elkhir",
+        "sbah lkhir",
+        "sbah el khir",
+        "sbah elkhir",
+        "sba3 khir",
+        "sba3khir",
+        "sba3 lkhir",
+        "sba3lkhir",
+        "sbe7 el khir",
+        "bonjour",
+        "good morning",
+        "صباح الخير",
+        "صباح النور",
+        "صباح الفل",
+        "صباح الورد",
+    ],
+    "evening": [
+        "msa lkhir",
+        "msa el khir",
+        "msa elkhir",
+        "msa el ward",
+        "msa el5ir",
+        "msa 5ir",
+        "msa khir",
+        "bonsoir",
+        "good evening",
+        "good night",
+        "tisba7 3la khir",
+        "tisbah ala khir",
+        "مساء الخير",
+        "مساء النور",
+        "تصبح على خير",
+    ],
+}
+
+
+def _detect_time_of_day_greeting(text: str) -> str | None:
+    if not text:
+        return None
+    normalized = _norm_for_matching(text)
+    if not normalized:
+        return None
+    for period, markers in _TIME_OF_DAY_GREETING_MARKERS.items():
+        for marker in markers:
+            needle = _norm_for_matching(marker)
+            if not needle:
+                continue
+            if needle in normalized:
+                return period
+    return None
 
 _TEMPORAL_FOLLOW_UP_MARKERS = [
     "date",
@@ -365,6 +432,24 @@ _WEEKDAY_NAMES = {
 
 _MODEL_CACHE: dict[str, tuple[Any, Any]] = {}
 _MODEL_LOCK = threading.Lock()
+_LLM_COOLDOWN_UNTIL = 0.0
+_LLM_COOLDOWN_REASON = ""
+_LLM_COOLDOWN_LOCK = threading.Lock()
+
+
+def _llm_cooldown_reason() -> str:
+    with _LLM_COOLDOWN_LOCK:
+        if time.time() < _LLM_COOLDOWN_UNTIL:
+            return _LLM_COOLDOWN_REASON
+    return ""
+
+
+def _activate_llm_cooldown(reason: str, seconds: int = 45) -> None:
+    global _LLM_COOLDOWN_UNTIL
+    global _LLM_COOLDOWN_REASON
+    with _LLM_COOLDOWN_LOCK:
+        _LLM_COOLDOWN_UNTIL = time.time() + max(5, seconds)
+        _LLM_COOLDOWN_REASON = reason.strip()[:180]
 
 
 def normalize_text(text: str) -> str:
@@ -472,7 +557,64 @@ def _is_social_check_in(text: str) -> bool:
     normalized = _norm_for_matching(text)
     if not normalized:
         return False
-    return _has_text_signal(text, _SOCIAL_CHECK_IN_MARKERS)
+    # 1) Fast path: exact substring match against curated markers.
+    if _has_text_signal(text, _SOCIAL_CHECK_IN_MARKERS):
+        return True
+    # 2) Semantic / fuzzy path for short utterances. Real users type
+    #    "chhlk", "cava", "cv ?", "kifk", "labas?" — none of which appear
+    #    verbatim in the marker list. We tolerate small edit-distance
+    #    variants and collapsed-vowel forms instead of forcing the marker
+    #    list to enumerate every possible typo.
+    tokens = [tok for tok in normalized.split() if tok]
+    if not tokens or len(tokens) > 4:
+        return False
+    # Strip punctuation-like tails and collapse repeated chars (e.g. "labess" -> "labes").
+    def _squash(token: str) -> str:
+        if not token:
+            return token
+        out = [token[0]]
+        for ch in token[1:]:
+            if ch != out[-1]:
+                out.append(ch)
+        return "".join(out)
+
+    # Glue tokens too: "ca va" -> "cava", "ch halek" -> "chhalek".
+    glued = "".join(tokens)
+    candidates: set[str] = {normalized, glued, _squash(glued)}
+    for tok in tokens:
+        candidates.add(tok)
+        candidates.add(_squash(tok))
+
+    # Canonical "wellbeing" anchors expressed without vowels/punctuation
+    # so squashed/typo'd inputs collapse onto them.
+    _CHECKIN_ANCHORS = {
+        "cv", "cava", "cv?", "chalek", "chhalek", "chhlek", "chhalk",
+        "kifek", "kifk", "kifrak", "kif7alek", "kifhalek",
+        "labes", "labas", "lbas", "lebas",
+        "chnahwalk", "chn7walek", "chnhwalk",
+        # arabic forms (already vowel-less)
+        "كيفك", "كيفاش حالك", "كيفاشحالك", "شنحوالك", "لاباس",
+    }
+    _CHECKIN_ANCHORS_SQUASHED = {_squash(a) for a in _CHECKIN_ANCHORS}
+
+    # Quick exact / squashed hit.
+    if candidates & (_CHECKIN_ANCHORS | _CHECKIN_ANCHORS_SQUASHED):
+        return True
+
+    # Edit-distance fallback (tolerant to one missing/extra char per token).
+    try:
+        from difflib import get_close_matches
+    except Exception:  # pragma: no cover
+        return False
+    pool = list(_CHECKIN_ANCHORS_SQUASHED)
+    for cand in candidates:
+        if not cand or len(cand) < 2:
+            continue
+        # Cutoff scaled by length: very short tokens need higher precision.
+        cutoff = 0.85 if len(cand) <= 3 else 0.78
+        if get_close_matches(cand, pool, n=1, cutoff=cutoff):
+            return True
+    return False
 
 
 def _is_temporal_follow_up(text: str, extracted_slots: dict[str, Any] | None = None) -> bool:
@@ -662,7 +804,7 @@ def _preferred_response_script(user_text: str) -> str:
 def _script_instruction(target_script: str) -> str:
     if target_script == "french":
         return (
-            "Réponds en français naturel et professionnel. Utilise un format frontend lisible: phrases courtes, "
+            "Réponds en français naturel et professionnel. Utilise un format lisible: phrases courtes, "
             "titres en gras, tableaux Markdown quand il y a plusieurs commandes, et badges statut exacts. "
             "Ne bascule pas en arabizi ou arabe si le message utilisateur est en français."
         )
@@ -772,7 +914,7 @@ def _apply_user_context_to_slots(intent: str, slots: dict[str, Any], user_contex
     slots = canonicalize_slots(slots)
     role = str(user_context.get("USER_ROLE", "OPTICIEN")).upper()
     if canonicalize_intent(intent) in {"order_tracking", "create_order", "order_creation"}:
-        if role == "OPTICIEN" and not slots.get("num_client") and user_context.get("USER_CODE_CLIENT"):
+        if not slots.get("num_client") and user_context.get("USER_CODE_CLIENT"):
             slots["num_client"] = user_context["USER_CODE_CLIENT"]
         if not slots.get("agence") and user_context.get("USER_AGENCE"):
             slots["agence"] = user_context["USER_AGENCE"]
@@ -1206,6 +1348,94 @@ def _recover_missing_slots_from_turn(
     return canonicalize_slots(updates)
 
 
+class _SemanticIntentMatcher:
+    """Semantic intent fallback via sentence-transformers cosine similarity.
+
+    Lazily initialized on first call. Reads ``intent_examples`` and
+    ``semantic_intent_model`` / ``semantic_intent_threshold`` from DOMAIN_CFG.
+    When keyword matching returns ``unknown``, this matcher finds the closest
+    intent from pre-embedded example phrases without any retraining.
+    """
+
+    def __init__(self) -> None:
+        self._model: Any = None
+        self._embeddings: dict[str, Any] = {}  # intent -> normalized mean np.ndarray
+        self._threshold: float = 0.42
+        self._loaded: bool = False
+
+    def _load(self) -> None:
+        if self._loaded:
+            return
+        self._loaded = True  # guard against re-entry
+        try:
+            import numpy as np
+            from sentence_transformers import SentenceTransformer
+
+            intent_examples: dict[str, list[str]] = DOMAIN_CFG.get("intent_examples", {})
+            if not intent_examples:
+                logger.info("[SemanticMatcher] No intent_examples in domain.json — disabled.")
+                return
+
+            self._threshold = float(DOMAIN_CFG.get("semantic_intent_threshold", 0.42))
+            model_name: str = DOMAIN_CFG.get(
+                "semantic_intent_model", "paraphrase-multilingual-MiniLM-L12-v2"
+            )
+            logger.info("[SemanticMatcher] Loading model: %s", model_name)
+            # Force CPU so the intent-matching model does not consume GPU VRAM
+            # reserved for the main LLM.
+            self._model = SentenceTransformer(model_name, device="cpu")
+
+            for intent, examples in intent_examples.items():
+                if not examples:
+                    continue
+                embs = self._model.encode(
+                    examples, normalize_embeddings=True, show_progress_bar=False
+                )
+                mean_emb = embs.mean(axis=0)
+                norm = np.linalg.norm(mean_emb)
+                self._embeddings[intent] = mean_emb / norm if norm > 0 else mean_emb
+
+            logger.info(
+                "[SemanticMatcher] Ready — %d intent embeddings (threshold=%.2f).",
+                len(self._embeddings),
+                self._threshold,
+            )
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[SemanticMatcher] Init failed: %s", exc)
+            self._model = None
+            self._embeddings = {}
+
+    def classify(self, text: str) -> str | None:
+        """Return best-matching intent if cosine similarity >= threshold, else None."""
+        self._load()
+        if not self._model or not self._embeddings:
+            return None
+        try:
+            import numpy as np
+
+            emb = self._model.encode(
+                [text], normalize_embeddings=True, show_progress_bar=False
+            )[0]
+            best_intent: str | None = None
+            best_score = self._threshold
+            for intent, intent_emb in self._embeddings.items():
+                score = float(np.dot(emb, intent_emb))
+                if score > best_score:
+                    best_score = score
+                    best_intent = intent
+            if best_intent:
+                logger.debug(
+                    "[SemanticMatcher] '%s' → %s (score=%.3f)", text[:60], best_intent, best_score
+                )
+            return best_intent
+        except Exception as exc:  # pragma: no cover
+            logger.warning("[SemanticMatcher] classify failed: %s", exc)
+            return None
+
+
+_SEMANTIC_MATCHER = _SemanticIntentMatcher()
+
+
 def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> str:
     extracted_slots = canonicalize_slots(extracted_slots)
     normalized = _norm_for_matching(text)
@@ -1253,6 +1483,26 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         if _norm_for_matching(keyword) not in {"illico"}
     ]
     strong_create_signal = has_keyword(strong_create_keywords)
+    # Robust fallback: a "want" verb (nheb / n7eb / bghit / nabghi / je veux /
+    # je voudrais / want / 3awez / 7eb) combined with the word "commande"
+    # (or "kommande" / "كوموند") should always be classified as
+    # create_order, even when the exact keyword variant is not in the domain
+    # config. This catches short utterances like "nheb commande" that were
+    # previously routed to clarify_need / greeting.
+    _CREATE_DESIRE_TOKENS = {
+        "nheb", "n7eb", "n hab", "nhab", "nabghi", "bghit",
+        "je veux", "je voudrais", "i want", "want",
+        "3awez", "3aweza", "3awza", "7eb", "ne7eb",
+        "نحب", "حابب", "حابة", "نريد", "ابغي",
+    }
+    _CREATE_OBJECT_TOKENS = {
+        "commande", "kommande", "komond", "كوموند", "طلب",
+        "order", "neworder", "naorder",
+    }
+    _has_desire = any(tok in normalized for tok in _CREATE_DESIRE_TOKENS)
+    _has_object = any(tok in normalized for tok in _CREATE_OBJECT_TOKENS)
+    if _has_desire and _has_object:
+        strong_create_signal = True
     create_signal = has_product_signal or strong_create_signal
     tracking_keywords = [
         keyword
@@ -1266,6 +1516,51 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         token in normalized for token in ["وين", "وصلت", "وقتاش", "تجي", "حالة", "statut", "livraison", "suivi"]
     )
     tracking_signal = has_order or has_keyword(tracking_keywords) or (tracking_question_signal and business_opening)
+    my_orders_signal = any(
+        token in normalized
+        for token in [
+            "mes commandes",
+            "my orders",
+            "commandes mte3i",
+            "commande mte3i",
+            "commandeti",
+            "talabati",
+            "طلباتي",
+            "طلبياتي",
+            "اوريني commandes",
+            "وريني commandes",
+            "liste commandes",
+        ]
+    )
+    profile_signal = any(
+        token in normalized
+        for token in [
+            "profil opticien",
+            "profile opticien",
+            "profil mte3i",
+            "profile mte3i",
+            "compte opticien",
+            "agence mte3i",
+            "mon profil",
+            "my profile",
+            "بروفيل",
+            "بروفايلي",
+        ]
+    )
+    verify_client_signal = has_num_client and any(
+        token in normalized
+        for token in [
+            "verify client",
+            "verifier client",
+            "vérifier client",
+            "client existe",
+            "client موجود",
+            "code client موجود",
+            "ثبتلي client",
+            "thabetli client",
+            "thabetli code",
+        ]
+    )
     price_signal = has_keyword(intent_keywords.get("price_inquiry", [])) or any(
         token in normalized
         for token in ["9adech", "qadech", "gadech", "soum", "soum", "essoum", "thamen", "thman"]
@@ -1278,6 +1573,9 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
             create_signal,
             tracking_signal,
             price_signal,
+            my_orders_signal,
+            profile_signal,
+            verify_client_signal,
         ]
     )
     date_query = _looks_like_current_date_query(text)
@@ -1296,7 +1594,19 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
         if date_query:
             return "current_date"
 
+    if my_orders_signal and not has_order:
+        return "mes_commandes"
+    if profile_signal:
+        return "profil_opticien"
+    if verify_client_signal and not tracking_signal:
+        return "verify_client"
+
     if business_opening and not create_signal and not tracking_signal and not availability_signal and not reference_signal and not schedule_signal and not price_signal:
+        # Before falling back to clarify_need, try semantic matching —
+        # the user may have phrased a known intent in an unseen way.
+        semantic_early = _SEMANTIC_MATCHER.classify(text)
+        if semantic_early and semantic_early not in {"clarify_need", "unknown"}:
+            return canonicalize_intent(semantic_early)
         return "clarify_need"
 
     if has_greeting and has_num_client and len(words) <= 4 and not (
@@ -1333,6 +1643,12 @@ def infer_intent(text: str, extracted_slots: dict[str, Any] | None = None) -> st
     for intent in ordered_intents:
         if has_keyword(intent_keywords.get(intent, [])):
             return canonicalize_intent(intent)
+
+    # Semantic fallback: use sentence-transformer similarity for unseen phrasings
+    semantic_intent = _SEMANTIC_MATCHER.classify(text)
+    if semantic_intent:
+        return canonicalize_intent(semantic_intent)
+
     return "unknown"
 
 
@@ -1662,15 +1978,15 @@ _STATUS_BADGES = {
     "EN_COURS": "⚙️ En cours",
     "EN_FABRICATION": "⚙️ En cours",
     "PROCESSING": "⚙️ En cours",
-    "VALIDEE": "✔️ Validée",
-    "VALIDATED": "✔️ Validée",
+    "VALIDEE": "✅ Validée",
+    "VALIDATED": "✅ Validée",
     "REJETEE": "❌ Rejetée",
     "REJECTED": "❌ Rejetée",
-    "LIVREE": "🚚 Livrée",
-    "DELIVERED": "🚚 Livrée",
-    "SHIPPED": "🚚 Livrée",
-    "ANNULEE": "🚫 Annulée",
-    "CANCELLED": "🚫 Annulée",
+    "LIVREE": "✅ Livrée",
+    "DELIVERED": "✅ Livrée",
+    "SHIPPED": "✅ Livrée",
+    "ANNULEE": "❌ Annulée",
+    "CANCELLED": "❌ Annulée",
 }
 
 
@@ -1779,13 +2095,40 @@ def _format_front_date(value: Any) -> str:
         return text
 
 
+def _format_short_date(value: Any) -> str:
+    text = _format_scalar(value)
+    if not text:
+        return ""
+    candidate = text.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+        return parsed.strftime("%d/%m/%Y")
+    except ValueError:
+        return text
+
+
+def _dash(value: Any) -> str:
+    text = value if isinstance(value, str) else _format_scalar(value)
+    return text if text else "—"
+
+
+def _render_tracking_error(tool_result: dict[str, Any] | None, order_id: str = "") -> str:
+    if not isinstance(tool_result, dict):
+        return ""
+    status = str(tool_result.get("status") or "").lower()
+    http_status = tool_result.get("http_status")
+    ref = order_id or "—"
+    if status == "not_found" or http_status == 404:
+        return f"🔍 Commande **{ref}** introuvable ou accès non autorisé."
+    if status == "unauthorized" or http_status == 401:
+        return "Votre session a expiré. Veuillez vous reconnecter."
+    if status == "forbidden" or http_status == 403:
+        return "Cette commande n'appartient pas à votre compte."
+    return ""
+
+
 def _role_action_buttons(user_context: dict[str, str] | None) -> str:
-    role = str((user_context or {}).get("USER_ROLE") or "OPTICIEN").upper()
-    if role == "ADMIN":
-        return "[🔄 Actualiser] [✏️ Changer statut] [📊 Dashboard]"
-    if role in {"OPERATEUR", "AGENT"}:
-        return "[🔄 Actualiser] [✏️ Changer statut] [👤 Fiche client]"
-    return "[🔄 Actualiser] [📋 Mes commandes] [📞 Support]"
+    return ""
 
 
 def _backend_order_payload(tool_result: dict[str, Any] | None) -> dict[str, Any]:
@@ -1794,39 +2137,454 @@ def _backend_order_payload(tool_result: dict[str, Any] | None) -> dict[str, Any]
     backend_result = tool_result.get("backend_result")
     if isinstance(backend_result, dict) and isinstance(backend_result.get("order"), dict):
         return backend_result["order"]
+    data = tool_result.get("data")
+    if isinstance(data, dict):
+        if isinstance(data.get("order"), dict):
+            return data["order"]
+        if any(key in data for key in ("reference", "numCmd", "statut", "statutLabel", "dateCreation", "client")):
+            return data
     return {}
 
 
 def _render_order_tracking_card(tool_result: dict[str, Any], user_context: dict[str, str] | None = None) -> str:
     order = _backend_order_payload(tool_result)
     opticien = order.get("opticien") if isinstance(order.get("opticien"), dict) else {}
+    client = order.get("client") if isinstance(order.get("client"), dict) else {}
+    ctx = user_context or {}
+    role = str(ctx.get("USER_ROLE") or "OPTICIEN").upper()
     reference = _first_non_empty(order.get("numCmd"), order.get("reference"), tool_result.get("order_id"))
     status = _first_non_empty(order.get("statut"), order.get("statutLabel"), tool_result.get("order_status"))
     badge = _status_badge(status)
-    created_at = _format_front_date(_first_non_empty(order.get("dateCommande"), tool_result.get("date")))
-    code_client = _first_non_empty(opticien.get("codeClient"), order.get("codeClient"), tool_result.get("num_client"))
-    agence = _first_non_empty(opticien.get("agence"), order.get("agence"), (user_context or {}).get("USER_AGENCE"))
-    commerce = _first_non_empty(opticien.get("nomCommerce"), opticien.get("nom"), opticien.get("raisonSociale"), "Opticien")
-    porteur = _first_non_empty(order.get("nomPorteur"), order.get("porteur"), tool_result.get("customer_name"), "N/A")
-    order_type = _first_non_empty(order.get("typeCommande"), tool_result.get("order_type"))
-    next_action = _first_non_empty(order.get("nextAction"), tool_result.get("next_action"))
+    created_at = _format_front_date(_first_non_empty(order.get("dateCommande"), order.get("dateCreation"), tool_result.get("date")))
+    updated_at = _format_front_date(_first_non_empty(order.get("dateDerniereMAJ"), order.get("updatedAt")))
+    numero_bon = _first_non_empty(
+        order.get("numeroBon"),
+        order.get("numBon"),
+        order.get("bonCommande"),
+        order.get("bcNumero"),
+        order.get("numeroBC"),
+        order.get("numBC"),
+    )
+    date_bon = _format_short_date(
+        _first_non_empty(order.get("dateBon"), order.get("dateBC"), order.get("dateNumeroBon"))
+    )
+    # Some payloads only carry the BC info inside the free-text `observations`
+    # field (e.g. "BC 597911 | Date BC 25/06/1225"). Best-effort extraction.
+    if not numero_bon or not date_bon:
+        observations = _format_scalar(order.get("observations"))
+        if observations:
+            import re as _re
+            if not numero_bon:
+                m = _re.search(r"\b(?:Num\s*BC|NumBC|N°\s*BC|BC)\s*[:#]?\s*(\d{3,})", observations, _re.IGNORECASE)
+                if m:
+                    numero_bon = m.group(1)
+            if not date_bon:
+                m = _re.search(r"\b(?:Date\s*BC|DateBC)\s*[:#]?\s*(\d{1,2}/\d{1,2}/\d{2,4})", observations, _re.IGNORECASE)
+                if m:
+                    date_bon = m.group(1)
+    code_client = _first_non_empty(opticien.get("codeClient"), client.get("codeClient"), order.get("codeClient"), tool_result.get("num_client"))
 
-    lines = [
-        f"📦 **{reference or 'Commande'}** · {badge}",
-        f"*Créée le {created_at}*",
-        "",
-        "**👤 Opticien**",
-        f"{commerce} · Code {code_client or 'N/A'}" + (f" · {agence}" if agence else ""),
-        "",
-        "**🧑 Porteur**",
-        f"Nom : {porteur}",
-    ]
+    # ── Sécurité OPTICIEN: refuser l'affichage si la commande appartient à un autre code client.
+    if role == "OPTICIEN":
+        user_code = str(ctx.get("USER_CODE_CLIENT") or "").strip()
+        if user_code and code_client and str(code_client).strip() != user_code:
+            return f"🔍 Commande **{reference or '—'}** introuvable ou accès non autorisé."
+
+    agence_payload = opticien.get("agence") if isinstance(opticien.get("agence"), dict) else {}
+    agence = _first_non_empty(
+        agence_payload.get("nom"),
+        opticien.get("agence") if not isinstance(opticien.get("agence"), dict) else "",
+        client.get("agence"),
+        order.get("agence"),
+        ctx.get("USER_AGENCE"),
+    )
+    ville = _first_non_empty(
+        agence_payload.get("ville"),
+        client.get("ville"),
+        opticien.get("ville"),
+        order.get("ville"),
+    )
+    commerce = _first_non_empty(opticien.get("nomCommerce"), opticien.get("raisonSociale"), client.get("nom"))
+    vendeur = _first_non_empty(
+        order.get("vendeur") if not isinstance(order.get("vendeur"), dict) else "",
+        order.get("nomVendeur"),
+        order.get("vendeurNom"),
+        _payload_label(order.get("vendeur")),
+        opticien.get("vendeur") if not isinstance(opticien.get("vendeur"), dict) else "",
+        opticien.get("nomVendeur"),
+    )
+    # Fallback: the embedded `opticien.user` object holds the seller (prenom + nom).
+    if not vendeur:
+        opticien_user = opticien.get("user") if isinstance(opticien.get("user"), dict) else {}
+        if opticien_user:
+            full = " ".join(
+                [
+                    str(opticien_user.get("prenom") or "").strip(),
+                    str(opticien_user.get("nom") or "").strip(),
+                ]
+            ).strip()
+            if full:
+                vendeur = full
+    opticien_nom = _first_non_empty(
+        opticien.get("nom"),
+        opticien.get("nomComplet"),
+        opticien.get("fullName"),
+        client.get("nomComplet"),
+        ctx.get("USER_PRENOM") if role != "ADMIN" else "",
+    )
+    porteur_payload = order.get("porteur") if isinstance(order.get("porteur"), dict) else {}
+    porteur_nom = _first_non_empty(
+        order.get("nomPorteur"),
+        porteur_payload.get("nomPrenom"),
+        porteur_payload.get("nomComplet"),
+        porteur_payload.get("fullName"),
+        porteur_payload.get("nom"),
+        order.get("porteur") if not isinstance(order.get("porteur"), dict) else "",
+        tool_result.get("customer_name"),
+    )
+    porteur_date_naissance = _format_short_date(
+        _first_non_empty(
+            porteur_payload.get("dateNaissance"),
+            porteur_payload.get("birthDate"),
+            order.get("dateNaissancePorteur"),
+        )
+    )
+    order_type = _first_non_empty(order.get("typeCommande"), order.get("type"), tool_result.get("order_type"))
+    quantity = _first_non_empty(order.get("quantity"), order.get("quantite"), order.get("qte"), order.get("nombreVerres"))
+    indice = _first_non_empty(order.get("indice"))
+    traitement = _first_non_empty(order.get("traitement"))
+    coloration = _first_non_empty(order.get("coloration"))
+
+    timeline = order.get("timeline") if isinstance(order.get("timeline"), list) else []
+    delivery_block = _delivery_table(tool_result)
+
+    lines: list[str] = [f"🛒 **Commande {_dash(reference)}** · {badge}", ""]
+
+    # ── Tableau principal Suivi commande ────────────────────────────────
+    lines.append("| Champ | Valeur |")
+    lines.append("|---|---|")
+    lines.append(f"| Référence | {_dash(reference)} |")
+    lines.append(f"| Statut | {badge} |")
     if order_type:
-        lines.extend(["", "**🏭 Verre**", order_type])
-    lines.extend(["", "**📍 Suivi**", f"{badge} ← étape actuelle"])
-    if next_action:
-        lines.append(f"Prochaine action : {next_action}")
-    lines.extend(["", _role_action_buttons(user_context)])
+        lines.append(f"| Type | {order_type} |")
+    if numero_bon:
+        lines.append(f"| N° bon (BC) | {numero_bon} |")
+    if date_bon:
+        lines.append(f"| Date de bon | {date_bon} |")
+    lines.append(f"| Date création | {_dash(created_at if created_at != 'N/A' else '')} |")
+    if updated_at and updated_at != "N/A":
+        lines.append(f"| Mise à jour | {updated_at} |")
+    lines.append("")
+
+    # ── Bloc Porteur (caché si vide) ───────────────────────────────────
+    if porteur_nom or porteur_date_naissance:
+        lines.append("**👤 Porteur**")
+        lines.append("| Nom complet | Date de naissance |")
+        lines.append("|---|---|")
+        lines.append(f"| {_dash(porteur_nom)} | {_dash(porteur_date_naissance)} |")
+        lines.append("")
+
+    # ── Bloc Opticien ──────────────────────────────────────────────────
+    if role == "ADMIN" and opticien_nom:
+        lines.append(f"**🧑‍💼 Opticien — {opticien_nom}**")
+    else:
+        lines.append("**🧑‍💼 Opticien**")
+    lines.append("| Code client | Commerce / Vendeur | Agence | Ville |")
+    lines.append("|---|---|---|---|")
+    if role == "ADMIN":
+        commerce_value = vendeur or commerce
+    else:
+        commerce_value = vendeur or opticien_nom or commerce
+    lines.append(
+        f"| {_dash(code_client)} | {_dash(commerce_value)} | {_dash(agence)} | {_dash(ville)} |"
+    )
+    lines.append("")
+
+    # ── Détails commande (prescription, mesures, type de verre, notes) ─
+    detail_blocks = _format_order_detail_blocks(
+        order,
+        indice=indice,
+        traitement=traitement,
+        coloration=coloration,
+        quantity=quantity,
+    )
+    if detail_blocks:
+        lines.extend(detail_blocks)
+        lines.append("")
+
+    # ── Bloc Timeline (si dispo) ───────────────────────────────────────
+    timeline_block = _format_timeline(timeline)
+    if timeline_block:
+        lines.extend(timeline_block)
+        lines.append("")
+
+    # ── Bloc Livraison ─────────────────────────────────────────────────
+    if delivery_block:
+        lines.extend(delivery_block)
+        lines.append("")
+
+    return "\n".join(lines).strip()
+
+
+def _first_dict_from(source: dict[str, Any], *keys: str) -> dict[str, Any]:
+    for key in keys:
+        value = source.get(key)
+        if isinstance(value, dict):
+            return value
+    return {}
+
+
+def _field_from(sources: list[dict[str, Any]], *keys: str) -> str:
+    for source in sources:
+        if not isinstance(source, dict):
+            continue
+        for key in keys:
+            value = source.get(key)
+            if isinstance(value, dict):
+                continue
+            rendered = _format_scalar(value)
+            if rendered:
+                return rendered
+    return ""
+
+
+def _payload_label(value: Any) -> str:
+    if isinstance(value, dict):
+        return _field_from([value], "nom", "name", "libelle", "designation", "label", "reference", "code")
+    return _format_scalar(value)
+
+
+def _eye_payload(order: dict[str, Any], eye: str) -> dict[str, Any]:
+    prescription = _first_dict_from(order, "prescription", "correction", "caracteristiques", "detailsOptiques")
+    if eye == "OD":
+        return _first_dict_from(order, "od", "OD", "oeilDroit", "rightEye") or _first_dict_from(
+            prescription, "od", "OD", "oeilDroit", "rightEye"
+        )
+    return _first_dict_from(order, "og", "OG", "oeilGauche", "leftEye") or _first_dict_from(
+        prescription, "og", "OG", "oeilGauche", "leftEye"
+    )
+
+
+def _eye_value(order: dict[str, Any], eye_payload: dict[str, Any], eye: str, field: str) -> str:
+    prefix = eye.lower()
+    suffixes = {
+        "sphere": [
+            "sphere", "sphère", "sph",
+            f"{prefix}_sphere", f"{prefix}Sphere", f"sphere{eye}", f"sph{eye}",
+        ],
+        "cylindre": [
+            "cylindre", "cyl",
+            f"{prefix}_cyl", f"{prefix}Cyl", f"cylindre{eye}", f"cyl{eye}",
+        ],
+        "axe": [
+            "axe", "axis",
+            f"{prefix}_axis", f"{prefix}Axe", f"axe{eye}", f"axis{eye}",
+        ],
+        "addition": [
+            "addition", "add",
+            f"{prefix}_addition", f"{prefix}Addition", f"addition{eye}", f"add{eye}",
+        ],
+    }
+    prescription = _first_dict_from(order, "prescription", "correction", "caracteristiques", "detailsOptiques")
+    return _field_from([eye_payload, prescription, order], *suffixes.get(field, []))
+
+
+def _format_order_detail_blocks(
+    order: dict[str, Any],
+    *,
+    indice: str = "",
+    traitement: str = "",
+    coloration: str = "",
+    quantity: str = "",
+) -> list[str]:
+    lines: list[str] = []
+
+    # ── Prescription OD/OG ────────────────────────────────────────────
+    od = _eye_payload(order, "OD")
+    og = _eye_payload(order, "OG")
+    od_values = [_eye_value(order, od, "OD", key) for key in ["sphere", "cylindre", "axe", "addition"]]
+    og_values = [_eye_value(order, og, "OG", key) for key in ["sphere", "cylindre", "axe", "addition"]]
+    if any(od_values + og_values):
+        lines.append("**👓 Prescription**")
+        lines.append("| Œil | Sphère | Cylindre | Axe | Addition |")
+        lines.append("|---|---|---|---|---|")
+        lines.append(f"| OD | {od_values[0] or '—'} | {od_values[1] or '—'} | {od_values[2] or '—'} | {od_values[3] or '—'} |")
+        lines.append(f"| OG | {og_values[0] or '—'} | {og_values[1] or '—'} | {og_values[2] or '—'} | {og_values[3] or '—'} |")
+        lines.append("")
+
+    # ── Mesures + Quantité ────────────────────────────────────────────
+    prescription = _first_dict_from(order, "prescription", "correction", "caracteristiques", "detailsOptiques")
+    precal = _first_dict_from(order, "precal", "prepare", "preparation")
+    pd = _field_from([precal, prescription, order], "pd", "PD", "ecartPD")
+    pg = _field_from([precal, prescription, order], "pg", "PG", "ecartPG")
+    hd = _field_from([precal, prescription, order], "hd", "HD", "hauteurDroite")
+    hg = _field_from([precal, prescription, order], "hg", "HG", "hauteurGauche")
+    if any([pd, pg, hd, hg, quantity]):
+        lines.append("**📏 Mesures**")
+        lines.append("| PD | PG | HD | HG | Quantité |")
+        lines.append("|---|---|---|---|---|")
+        lines.append(
+            f"| {pd or '—'} | {pg or '—'} | {hd or '—'} | {hg or '—'} | {quantity or '—'} |"
+        )
+        lines.append("")
+
+    # ── Type de verre (libellé + réf technique + caractéristiques) ────
+    produit = _first_dict_from(order, "produit", "product", "verre", "typeVerre", "lens", "article")
+    produit_label = _first_non_empty(
+        _payload_label(order.get("produit")),
+        _payload_label(order.get("product")),
+        _payload_label(order.get("verre")),
+        _payload_label(order.get("typeVerre")),
+        order.get("nomProduit"),
+        order.get("produitNom"),
+        order.get("designation"),
+    )
+    reference_technique = _field_from(
+        [produit],
+        "referenceTechnique",
+        "refTechnique",
+        "reference_technique",
+        "ref",
+        "code",
+    ) or _field_from([order], "referenceTechnique", "refTechnique", "reference_technique")
+    if produit_label or reference_technique or indice or traitement or coloration:
+        lines.append("**🔎 Type de verre**")
+        if produit_label or reference_technique:
+            lines.append(
+                f"{produit_label or '—'}  ·  Réf. technique : {reference_technique or '—'}"
+            )
+        if indice or traitement or coloration:
+            lines.append("")
+            lines.append("| Indice | Traitement | Coloration |")
+            lines.append("|---|---|---|")
+            lines.append(f"| {indice or '—'} | {traitement or '—'} | {coloration or '—'} |")
+        lines.append("")
+
+    # ── Notes ─────────────────────────────────────────────────────────
+    notes = _field_from(
+        [order],
+        "notes",
+        "note",
+        "remarques",
+        "commentaire",
+        "commentaires",
+        "notesCalcul",
+    )
+    if not notes:
+        # observations is often an unstructured dump (BC / NotesCalcul / Téléphone…).
+        # Surface only the human-readable "Remarque:" segment if present.
+        observations = _format_scalar(order.get("observations")) or _field_from([order], "observations")
+        if observations:
+            import re as _re
+            m = _re.search(r"Remarque\s*[:#]?\s*([^|]+)", observations, _re.IGNORECASE)
+            if m:
+                notes = m.group(1).strip()
+    if notes:
+        lines.append("**📝 Notes**")
+        lines.append(notes)
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return lines
+
+
+_TIMELINE_ICONS = {
+    "CURRENT": "🟢",
+    "DONE": "✅",
+    "PENDING": "⚪",
+    "CANCELED": "❌",
+    "CANCELLED": "❌",
+}
+
+_TIMELINE_LABELS = {
+    "CREEE": "Créée",
+    "EN_ATTENTE": "En attente",
+    "EN_COURS": "En cours",
+    "VALIDEE": "Validée",
+    "LIVREE": "Livrée",
+    "ANNULEE": "Annulée",
+}
+
+_TIMELINE_STATUS_LABELS = {
+    "CURRENT": "Actuel",
+    "DONE": "Terminé",
+    "PENDING": "En attente",
+    "CANCELED": "Annulé",
+    "CANCELLED": "Annulé",
+}
+
+
+def _format_timeline(timeline: list[Any]) -> list[str]:
+    if not timeline:
+        return []
+    out: list[str] = ["**⏱️ Timeline**", "| Étape | État | Date |", "|---|---|---|"]
+    has_row = False
+    for step in timeline:
+        if not isinstance(step, dict):
+            continue
+        nom = str(step.get("nom") or "").strip()
+        statut = str(step.get("statut") or "").strip().upper()
+        date = _format_front_date(step.get("date")) if step.get("date") else "—"
+        icon = _TIMELINE_ICONS.get(statut, "·")
+        label = _TIMELINE_LABELS.get(nom, nom or "—")
+        status_label = _TIMELINE_STATUS_LABELS.get(statut, statut.title() or "—")
+        out.append(f"| {label} | {icon} {status_label} | {date} |")
+        has_row = True
+    return out if has_row else []
+
+
+def _delivery_table(tool_result: dict[str, Any]) -> list[str]:
+    """Build a markdown table block describing the delivery schedule, if any."""
+    schedule = tool_result.get("delivery_schedule") if isinstance(tool_result.get("delivery_schedule"), dict) else {}
+    source = schedule if schedule else tool_result
+    agence = _first_non_empty(source.get("agence"))
+    secteur = _first_non_empty(source.get("secteur"))
+    next_slot = _first_non_empty(source.get("next_slot"), source.get("premier_creneau"))
+    eta_days = _first_non_empty(tool_result.get("eta_days"))
+    if not any([agence, secteur, next_slot, eta_days]):
+        return []
+    lines = ["**🚚 Livraison**", "| Agence | Secteur | Créneau |", "|---|---|---|"]
+    creneau = next_slot or (f"~{eta_days} j" if eta_days else "—")
+    lines.append(f"| {agence or '—'} | {secteur or 'Tous les clients'} | {creneau} |")
+    return lines
+
+
+def _render_delivery_schedule_card(
+    tool_result: dict[str, Any],
+    slots: dict[str, Any],
+    user_context: dict[str, str] | None = None,
+) -> str:
+    """Structured markdown card for the delivery_schedule intent."""
+    agence = _first_non_empty(tool_result.get("agence"), slots.get("agence"))
+    secteur = _first_non_empty(tool_result.get("secteur"), slots.get("secteur"))
+    city = _first_non_empty(tool_result.get("city"), slots.get("city"))
+    next_slot = _first_non_empty(tool_result.get("next_slot"), tool_result.get("premier_creneau"))
+    all_slots = tool_result.get("tous_creneaux") or tool_result.get("creneaux") or []
+    if not isinstance(all_slots, list):
+        all_slots = []
+
+    header = "🚚 **Planning livraison**"
+    lines = [header, ""]
+    lines.append("| Champ | Valeur |")
+    lines.append("|---|---|")
+    if agence:
+        lines.append(f"| Agence | {agence} |")
+    if city and city != agence:
+        lines.append(f"| Ville | {city} |")
+    lines.append(f"| Secteur | {secteur or 'Tous les clients'} |")
+    lines.append(f"| Prochain créneau | {next_slot or '—'} |")
+
+    extra_slots = [str(slot) for slot in all_slots if str(slot).strip() and str(slot) != next_slot]
+    if extra_slots:
+        lines.append("")
+        lines.append("**Autres créneaux**")
+        lines.append("| # | Créneau |")
+        lines.append("|---|---|")
+        for idx, slot in enumerate(extra_slots[:5], start=1):
+            lines.append(f"| {idx} | {slot} |")
+
+    lines.append("")
+    lines.append("_Fenêtre approximative — sous réserve de planning agence._")
     return "\n".join(lines).strip()
 
 
@@ -2089,6 +2847,37 @@ def _render_controlled_response(
     if intent == "greeting":
         first_name = _first_non_empty((user_context or {}).get("USER_PRENOM"))
         last_name = _first_non_empty((user_context or {}).get("USER_NOM"))
+        normalized_user = _norm_for_matching(user_text)
+        # 1) Social check-in ("chhalek", "cv", "labes", "kifek", ...)
+        #    must be answered with a wellbeing reply BEFORE the named-greeting
+        #    branch — otherwise logged-in users always get the generic
+        #    "Salut <name>" reply, which is what the user complained about.
+        if _is_social_check_in(user_text):
+            name_suffix = f" {first_name}" if first_name else ""
+            return _script_text(
+                target_script,
+                arabic=f"لاباس الحمد لله{(' يا ' + first_name) if first_name else ''}، يعطيك الصحة 🙏. قولي توة شنية نجم نعاونك فيه؟",
+                latin=f"Labes hamdoullah{name_suffix}, ya3tik essa7a 🙏. 9olli tawa chnia najem n3awnek fih? (suivi, commande, dispo, prix, livraison)",
+                french=f"Hamdoullah, ça va bien{(' ' + first_name) if first_name else ''} 🙏 merci. Comment puis-je vous aider ? (suivi, nouvelle commande, disponibilité, prix, livraison)",
+            )
+        # 2) Time-of-day greeting ("sba7 lkhir", "sba7 el khir", "msa lkhir", ...)
+        time_greeting = _detect_time_of_day_greeting(user_text)
+        if time_greeting:
+            name_suffix = f" {first_name}" if first_name else ""
+            if time_greeting == "morning":
+                return _script_text(
+                    target_script,
+                    arabic=f"صباح الخير{(' يا ' + first_name) if first_name else ''} 🌞، يعطيك الصحة. شنية نجم نعاونك فيه اليوم؟",
+                    latin=f"Sba7 el khir{name_suffix} 🌞, ya3tik essa7a. Chnia najem n3awnek fih lyoum?",
+                    french=f"Bonjour{name_suffix} 🌞 Comment puis-je vous aider aujourd'hui ?",
+                )
+            return _script_text(
+                target_script,
+                arabic=f"مساء الخير{(' يا ' + first_name) if first_name else ''} 🌙، يعطيك الصحة. شنية نجم نعاونك فيه؟",
+                latin=f"Msa el khir{name_suffix} 🌙, ya3tik essa7a. Chnia najem n3awnek fih?",
+                french=f"Bonsoir{name_suffix} 🌙 Comment puis-je vous aider ?",
+            )
+        # 3) Named greeting (logged-in user, short message, no check-in)
         if first_name and len(normalize_text(user_text).split()) < 5:
             full_name = " ".join(part for part in [first_name, last_name] if part).strip()
             return _script_text(
@@ -2097,13 +2886,7 @@ def _render_controlled_response(
                 latin=f"Salut {first_name} 👋 Chnowa najjem na3mellek?",
                 french=f"Bonjour M. {full_name} 👋\nComment puis-je vous aider avec vos commandes ?",
             )
-        if _is_social_check_in(user_text):
-            return _script_text(
-                target_script,
-                arabic="لاباس الحمد لله، يعطيك الصحة. قولي توة شنية نجم نعاونك فيه؟",
-                latin="Labes hamdoullah, ya3tik essa7a. 9olli tawa chnia najem n3awnek fih?",
-                french="Je vais bien, merci. Comment puis-je vous aider avec vos commandes ?",
-            )
+        # 4) Generic greeting fallback (anonymous or longer text)
         return _script_text(
             target_script,
             arabic="عسلامة، مرحبا بيك. قولي شنية نجم نعاونك فيه اليوم؟",
@@ -2130,7 +2913,114 @@ def _render_controlled_response(
         return _agent_location_response(target_script)
     if intent in {"current_date", "current_time", "current_datetime"}:
         return _current_datetime_response(intent, target_script)
+    if intent == "mes_commandes":
+        if tool_status == "ok" and isinstance(tool_result, dict):
+            data = tool_result.get("data")
+            items = data.get("items", []) if isinstance(data, dict) else data if isinstance(data, list) else []
+            total = data.get("total") if isinstance(data, dict) else None
+            if not isinstance(items, list) or not items:
+                return _script_text(
+                    target_script,
+                    arabic="ما لقيتش commandes في compte متاعك توة.",
+                    latin="Ma l9itech commandes fi compte mte3ek tawa.",
+                    french="Je n'ai trouvé aucune commande sur votre compte.",
+                )
+            header = _script_text(
+                target_script,
+                arabic=f"هاو آخر commandes متاعك{f' ({total} total)' if total else ''}:",
+                latin=f"Haw آخر commandes mte3ek{f' ({total} total)' if total else ''}:",
+                french=f"Voici vos dernières commandes{f' ({total} au total)' if total else ''} :",
+            )
+            lines = [header, "", "| Commande | Statut | Type | Date |", "|---|---|---|---|"]
+            for item in items[:5]:
+                if not isinstance(item, dict):
+                    continue
+                ref = _first_non_empty(item.get("numCmd"), item.get("reference"), item.get("order_id")) or "—"
+                status = _status_badge(_first_non_empty(item.get("statut"), item.get("statutLabel"), item.get("status")))
+                order_type = _first_non_empty(item.get("typeCommande"), item.get("type"))
+                if not order_type:
+                    order_type = "PRECAL" if item.get("precal") else "STOCK" if item.get("stock") else "RX" if item.get("rx") else "—"
+                date = _format_front_date(_first_non_empty(item.get("dateCommande"), item.get("dateCreation"), item.get("createdAt")))
+                lines.append(f"| {ref} | {status} | {order_type} | {date} |")
+            return "\n".join(lines).strip()
+        message = _first_non_empty((tool_result or {}).get("error") if isinstance(tool_result, dict) else None)
+        return _script_text(
+            target_script,
+            arabic=f"ما نجمتش نجيب commandes متاعك. {message or 'ثبت session وعاود جرّب.'}",
+            latin=f"Ma najamtch njib commandes mte3ek. {message or 'Thabet session w 3awed jarreb.'}",
+            french=message or "Impossible de récupérer vos commandes. Vérifiez votre session.",
+        )
+    if intent == "profil_opticien":
+        if tool_status == "ok" and isinstance(tool_result, dict):
+            data = tool_result.get("data") if isinstance(tool_result.get("data"), dict) else {}
+            opticien = data.get("opticien") if isinstance(data.get("opticien"), dict) else {}
+            user = data.get("user") if isinstance(data.get("user"), dict) else {}
+            agence_obj = opticien.get("agence") if isinstance(opticien.get("agence"), dict) else {}
+            stats = data.get("statistiques") if isinstance(data.get("statistiques"), dict) else {}
+            code_client = _first_non_empty(opticien.get("codeClient"), data.get("codeClient"), (user_context or {}).get("USER_CODE_CLIENT"))
+            email = _first_non_empty(user.get("email"), opticien.get("email"))
+            nom = " ".join(part for part in [_first_non_empty(user.get("prenom")), _first_non_empty(user.get("nom"))] if part).strip()
+            agence = _first_non_empty(agence_obj.get("nom"), opticien.get("agence"), (user_context or {}).get("USER_AGENCE"))
+            ville = _first_non_empty(agence_obj.get("ville"), opticien.get("ville"))
+            etat = _first_non_empty(opticien.get("etat"), data.get("etat"))
+            total_orders = _first_non_empty(stats.get("totalCommandes"), stats.get("commandesTotal"), stats.get("total"))
+            lines = [
+                _script_text(
+                    target_script,
+                    arabic="هذا profil opticien متاعك:",
+                    latin="Hedha profil opticien mte3ek:",
+                    french="Voici votre profil opticien :",
+                ),
+                "",
+                "| Champ | Valeur |",
+                "|---|---|",
+                f"| Code client | {code_client or '—'} |",
+                f"| Nom | {nom or '—'} |",
+                f"| Email | {email or '—'} |",
+                f"| Agence | {agence or '—'} |",
+                f"| Ville | {ville or '—'} |",
+                f"| État | {etat or '—'} |",
+            ]
+            if total_orders:
+                lines.append(f"| Total commandes | {total_orders} |")
+            return "\n".join(lines).strip()
+        message = _first_non_empty((tool_result or {}).get("error") if isinstance(tool_result, dict) else None)
+        return _script_text(
+            target_script,
+            arabic=f"ما نجمتش نجيب profil opticien. {message or 'ثبت session وعاود جرّب.'}",
+            latin=f"Ma najamtch njib profil opticien. {message or 'Thabet session w 3awed jarreb.'}",
+            french=message or "Impossible de récupérer le profil opticien. Vérifiez votre session.",
+        )
+    if intent == "verify_client":
+        if tool_status == "ok" and isinstance(tool_result, dict):
+            data = tool_result.get("data") if isinstance(tool_result.get("data"), dict) else {}
+            code_client = _first_non_empty(data.get("codeClient"), slots.get("num_client"), (user_context or {}).get("USER_CODE_CLIENT"))
+            etat = _first_non_empty(data.get("etat"), data.get("status"))
+            actif = data.get("compteActif")
+            actif_text = "oui" if actif is True else "non" if actif is False else "—"
+            return _script_text(
+                target_script,
+                arabic=f"ثبتت: client {code_client or '—'} موجود. الحالة: {etat or '—'}، compte actif: {actif_text}.",
+                latin=f"Thabbet: client {code_client or '—'} mawjoud. El 7ala: {etat or '—'}, compte actif: {actif_text}.",
+                french=f"Client {code_client or '—'} vérifié. État : {etat or '—'}, compte actif : {actif_text}.",
+            )
+        message = _first_non_empty((tool_result or {}).get("error") if isinstance(tool_result, dict) else None)
+        return _script_text(
+            target_script,
+            arabic=f"ما نجمتش نثبت client. {message or 'ثبت code client وsession.'}",
+            latin=f"Ma najamtch nthabet client. {message or 'Thabet code client w session.'}",
+            french=message or "Impossible de vérifier le client. Vérifiez le code client et la session.",
+        )
     if intent == "get_num_client":
+        if tool_status == "ok" and isinstance(tool_result, dict):
+            data = tool_result.get("data") if isinstance(tool_result.get("data"), dict) else {}
+            num_client = _first_non_empty(data.get("codeClient"), slots.get("num_client"))
+            etat = _first_non_empty(data.get("etat"), data.get("status"))
+            return _script_text(
+                target_script,
+                arabic=f"وصلني num client {num_client}. الحالة: {etat or '—'}. توة قولي شنية الطلب بالضبط.",
+                latin=f"Woselni num client {num_client}. El 7ala: {etat or '—'}. Tawa 9olli chnia et demande bedhabt.",
+            )
         if slots.get("num_client"):
             num_client = _first_non_empty(slots.get("num_client"))
             return _script_text(
@@ -2202,7 +3092,7 @@ def _render_controlled_response(
             delivery = _delivery_phrase(tool_result, target_script)
             response = _script_text(
                 target_script,
-                arabic=f"ثبتّ الطلبية {order_id}. حالتها توة {status_label}.",
+                arabic=f"ثبتّ الكوموند {order_id}. حالتها توة {status_label}.",
                 latin=f"Thabbet el commande {order_id}. 7aletha taw {status_label}.",
                 french=f"J'ai vérifié la commande {order_id}. Son statut actuel est {status_label}.",
             )
@@ -2212,27 +3102,27 @@ def _render_controlled_response(
         if tool_status == "verification_failed":
             return _script_text(
                 target_script,
-                arabic="رقم الحريف ما يطابقش الطلبية هاذي. ثبتلي num client ولا bon de commande من جديد.",
+                arabic="رقم الحريف ما يطابقش الكوموند هاذي. ثبتلي num client ولا bon de commande من جديد.",
                 latin="Num client ma ytetabe9ch m3a hedhi el commande. Thabetli num client wala bon de commande men jdid.",
                 french="Cette commande n'appartient pas au code client fourni. Vérifiez la référence ou reconnectez-vous avec le bon compte.",
             )
         if tool_status == "not_found":
             return _script_text(
                 target_script,
-                arabic="ما لقيتش الطلبية بهالمعطيات. ثبتلي num client و bon de commande من فضلك.",
+                arabic="ما لقيتش الكوموند بهالمعطيات. ثبتلي num client و bon de commande من فضلك.",
                 latin="Ma l9itech el commande bel ma3tiyet hedhom. Thabetli num client w bon de commande men fadhlik.",
                 french=f"Commande introuvable ou accès non autorisé{f' pour **{order_id}**' if order_id else ''}.",
             )
         if tool_status == "error" and isinstance(tool_result, dict) and tool_result.get("message"):
             return _script_text(
                 target_script,
-                arabic="صار مشكل تقني في التثبت من الطلبية. جرّب بعد شوية.",
+                arabic="صار مشكل تقني في التثبت من الكوموند. جرّب بعد شوية.",
                 latin="Saret mochkla technique fi verification commande. Jarreb ba3d chweya.",
                 french=str(tool_result.get("message")),
             )
         return _script_text(
             target_script,
-            arabic="نجم نتثبت على الطلبية، أما توا ما عنديش نتيجة مؤكدة. ثبتلي المعطيات من فضلك.",
+            arabic="نجم نتثبت على الكوموند، أما توا ما عنديش نتيجة مؤكدة. ثبتلي المعطيات من فضلك.",
             latin="Najjem nthabet 3al commande, ama tawa ma 3andich natija m2akkda. Thabetli el ma3tiyet men fadhlik.",
             french="Je peux vérifier la commande, mais je n'ai pas encore de résultat confirmé. Vérifiez la référence puis réessayez.",
         )
@@ -2317,6 +3207,10 @@ def _render_controlled_response(
                         + "Ama ma najjemch n2akked men tawa ken hedha lyoum wala nhar e5er, khater hedhi teb9a fenetre ta9ribiya moch confirmation nehaiya."
                     ),
                 )
+            if isinstance(tool_result, dict):
+                card = _render_delivery_schedule_card(tool_result, slots, user_context=user_context)
+                if card:
+                    return card
             delivery = _delivery_phrase(tool_result, target_script)
             return delivery or _script_text(
                 target_script,
@@ -2538,6 +3432,14 @@ def load_llm(model_variant: str = "prod") -> tuple[Any, Any]:
                 bnb_4bit_compute_dtype=torch.float16,
             )
             kwargs["device_map"] = "auto"
+            # Avoid accelerate's default 90% VRAM heuristic that can offload
+            # layers to CPU/disk and trigger intermittent 500 errors.
+            try:
+                total_gb = torch.cuda.get_device_properties(0).total_memory / (1024**3)
+                usable_gb = max(1, int(total_gb * 0.97))
+                kwargs["max_memory"] = {0: f"{usable_gb}GiB", "cpu": "64GiB"}
+            except Exception:
+                pass
         else:
             kwargs["torch_dtype"] = torch.float16 if torch.cuda.is_available() else torch.float32
             if torch.cuda.is_available():
@@ -2712,10 +3614,12 @@ def production_infer(
     history = history or []
     normalized_user_context = _normalize_user_context(user_context)
     runtime_mode = _resolve_runtime_mode(runtime_mode)
-    user_script = _detect_script_like(user_text)
-    target_script = _preferred_response_script(user_text)
+    # --- Presidio privacy filter ---
+    filtered_text, detected_entities = presidio_filter(user_text)
+    user_script = _detect_script_like(filtered_text)
+    target_script = _preferred_response_script(filtered_text)
 
-    text = normalize_text(user_text)
+    text = normalize_text(filtered_text)
     explicit_topic_reset = _is_explicit_topic_reset(text)
     session_state = memory_store.get_session_state(session_id) if memory_store and session_id else {}
     extracted_slots = extract_slots(text)
@@ -2793,7 +3697,40 @@ def production_infer(
     if intent == "get_num_client" and not slots.get("num_client"):
         missing_slots = ["num_client"]
     auto_execute_tool = _should_execute_tool_for_mode(intent, missing_slots, runtime_mode)
-    tool_result = tool_registry.execute(tool_name, tool_args, context=normalized_user_context) if tool_name and auto_execute_tool else None
+
+    # ── OptiFlow agent override ───────────────────────────────────────────
+    # When the LLM intent matches a canonical OptiFlow tool AND the request
+    # carries a backend_url (and a token if needed), call the real Nest API
+    # instead of the local KB. Falls back transparently when not applicable.
+    tool_result = None
+    optiflow_used = False
+    try:
+        from .optiflow_agent import run_optiflow_agent_step  # local import: optional dep
+
+        optiflow_step = run_optiflow_agent_step(
+            intent=intent,
+            slots=slots,
+            user_context=normalized_user_context,
+        )
+    except Exception as exc:  # pragma: no cover - defensive
+        logger.warning("OptiFlow agent step failed: %s", exc)
+        optiflow_step = None
+
+    if optiflow_step is not None:
+        optiflow_used = True
+        tool_call_override = optiflow_step.get("tool_call") or {}
+        tool_name = tool_call_override.get("name") or tool_name
+        tool_args = tool_call_override.get("arguments") or tool_args
+        if optiflow_step.get("missing"):
+            missing_slots = list(dict.fromkeys([*missing_slots, *optiflow_step["missing"]]))
+            auto_execute_tool = False
+        tool_result = optiflow_step.get("tool_result")
+
+    if not optiflow_used:
+        tool_result = (
+            tool_registry.execute(tool_name, tool_args, context=normalized_user_context)
+            if tool_name and auto_execute_tool else None
+        )
     if isinstance(tool_result, dict):
         tool_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
         if tool_missing:
@@ -2913,19 +3850,33 @@ def production_infer(
                 )
 
             messages.append({"role": "user", "content": text})
-            response = _generate(messages, model_variant=model_variant)
-            response = _scrub_pii(response, slots)
-            response = _strip_leaked_english(response, target_script=target_script)
-            response = _humanize(response)
-            if _is_script_mismatch(response, target_script):
-                retry_messages = _build_script_retry_messages(messages, target_script)
-                response = _generate(retry_messages, model_variant=model_variant)
+            try:
+                cooldown_reason = _llm_cooldown_reason()
+                if cooldown_reason:
+                    raise RuntimeError(f"llm_cooldown_active: {cooldown_reason}")
+
+                response = _generate(messages, model_variant=model_variant)
                 response = _scrub_pii(response, slots)
                 response = _strip_leaked_english(response, target_script=target_script)
                 response = _humanize(response)
-            response = _truncate(response)
+                if _is_script_mismatch(response, target_script):
+                    retry_messages = _build_script_retry_messages(messages, target_script)
+                    response = _generate(retry_messages, model_variant=model_variant)
+                    response = _scrub_pii(response, slots)
+                    response = _strip_leaked_english(response, target_script=target_script)
+                    response = _humanize(response)
+                response = _truncate(response)
+            except Exception as exc:  # pragma: no cover - runtime dependent
+                error_text = str(exc)
+                if "llm_cooldown_active" in error_text:
+                    logger.warning("LLM cooldown active; serving fallback response.")
+                else:
+                    logger.exception("LLM generation failed; serving fallback response: %s", exc)
+                    _activate_llm_cooldown(error_text, seconds=60)
+                response = _get_fallback_response("unclear", target_script=target_script)
+                response_source = "fallback_generation_error"
 
-    if _is_garbage_response(response):
+    if response_source not in {"controlled_template", "admin_correction", "topic_reset"} and _is_garbage_response(response):
         response = _get_fallback_response("unclear", target_script=target_script)
         response_source = "fallback"
 

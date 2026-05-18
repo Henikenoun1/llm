@@ -23,7 +23,11 @@ app = FastAPI(title="Configurable Call Center LLM", version="3.0")
 app.add_middleware(
     CORSMiddleware,
     allow_origins=CFG.cors_allowed_origins,
-    allow_origin_regex=r"https://[a-z0-9-]+\.devtunnels\.ms",
+    allow_origin_regex=(
+        r"^(https://[a-z0-9-]+\.devtunnels\.ms"
+        r"|http://(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?"
+        r"|http://(10\.\d+\.\d+\.\d+|192\.168\.\d+\.\d+|172\.(1[6-9]|2\d|3[0-1])\.\d+\.\d+)(:\d+)?)$"
+    ),
     allow_methods=["*"],
     allow_headers=["*"],
 )
@@ -64,6 +68,11 @@ class ChatRequest(BaseModel):
     model_variant: str = "prod"
     runtime_mode: str | None = None
     user_context: dict[str, Any] = Field(default_factory=dict)
+    # Extensions OptiFlow: prompt système ReAct + credentials/URL pour le tool-calling.
+    system: str | None = None
+    access_token: str | None = None
+    backend_url: str | None = None
+    available_tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ChatResponse(BaseModel):
@@ -175,14 +184,52 @@ class RecommendationChatResponse(BaseModel):
     rag_results: list[dict[str, Any]] = []
 
 
+def _strip_bearer_prefix(value: str | None) -> str:
+    text = str(value or "").strip()
+    if text.lower().startswith("bearer "):
+        return text[7:].strip()
+    return text
+
+
+def _set_context_aliases(context: dict[str, Any], canonical: str, aliases: list[str], value: str | None) -> None:
+    text = str(value or "").strip()
+    if not text:
+        return
+    if any(str(context.get(alias) or "").strip() for alias in [canonical, *aliases]):
+        return
+    context[canonical] = text
+    for alias in aliases:
+        context.setdefault(alias, text)
+
+
 @app.post("/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
+async def chat(
+    req: ChatRequest,
+    _: None = Depends(_authorize),
+    authorization: str | None = Header(default=None),
+    x_optiflow_backend_url: str | None = Header(default=None),
+) -> ChatResponse:
     assert _retriever is not None
     assert _memory_store is not None
     assert _tool_registry is not None
     assert _correction_store is not None
 
     history = _memory_store.get_session_history(req.session_id)
+
+    # Merge OptiFlow extensions into user_context so downstream code (tool execution,
+    # prompt placeholders) sees ACCESS_TOKEN / BACKEND_URL / SYSTEM_PROMPT consistently.
+    merged_user_context: dict[str, Any] = dict(req.user_context or {})
+    token = _strip_bearer_prefix(req.access_token or authorization)
+    backend_url = str(req.backend_url or x_optiflow_backend_url or "").strip().rstrip("/")
+    _set_context_aliases(merged_user_context, "ACCESS_TOKEN", ["access_token", "accessToken", "token"], token)
+    _set_context_aliases(merged_user_context, "BACKEND_URL", ["backend_url", "backendUrl"], backend_url)
+    if req.system:
+        merged_user_context.setdefault("SYSTEM_PROMPT", req.system)
+        merged_user_context.setdefault("system_prompt", req.system)
+    if req.available_tools:
+        merged_user_context.setdefault("AVAILABLE_TOOLS", req.available_tools)
+        merged_user_context.setdefault("available_tools", req.available_tools)
+
     result = production_infer(
         user_text=req.message,
         retriever=_retriever,
@@ -190,7 +237,7 @@ async def chat(req: ChatRequest, _: None = Depends(_authorize)) -> ChatResponse:
         session_id=req.session_id,
         model_variant=req.model_variant,
         runtime_mode=req.runtime_mode,
-        user_context=req.user_context,
+        user_context=merged_user_context,
         memory_store=_memory_store,
         tool_registry=_tool_registry,
         correction_store=_correction_store,

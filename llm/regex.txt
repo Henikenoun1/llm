@@ -1,0 +1,662 @@
+// tunisianPatterns.ts
+//
+// Hybrid intent router for Tounsi / FR / Arabizi / Arabic small-talk.
+//
+// Pipeline (call order from your app):
+//   1. normalizeTunisian(input)          -> texte propre
+//   2. detectIntentDetailed(input)       -> { intent, confidence, source }
+//        - "regex"        : match franc, on peut répondre direct
+//        - "regex_low"    : match mais texte contient des mots métier
+//                           => on RECOMMANDE de laisser le LLM décider
+//        - "fallback"     : aucune regex, intent = "unknown"
+//   3. Si source === "regex"  -> replyTunisian(input)
+//      Si source === "regex_low" ou intent === "unknown"
+//                                -> passer au LLM intent classifier
+//
+// L'API publique historique est conservée à l'identique :
+//   - export type Intent
+//   - export function normalizeTunisian(text)
+//   - export function detectIntent(input): Intent
+//   - export function replyTunisian(input): string
+// => l'intégration existante continue de marcher sans modification.
+//
+// Nouveautés (sans casser l'existant) :
+//   - export function detectIntentDetailed(input): IntentResult
+//   - export function shouldDeferToLLM(input): boolean
+//   - normalisation arabe enrichie (أإآ→ا, ى→ي, ة→ه, tashkeel, tatweel…)
+//   - garde-fou anti faux-positifs : "ça va ma commande ?" n'est PAS how_are_you
+//   - priorité claire : bot_identity > thanks > goodbye > how_are_you > greeting
+//   - exemples ajoutés (yo, hey, hola, à plus, see you, ahla bik, sbah el khir, …)
+
+export type Intent =
+  | "greeting"
+  | "bot_identity"
+  | "how_are_you"
+  | "thanks"
+  | "goodbye"
+  | "unknown";
+
+export type IntentSource = "regex" | "regex_low" | "fallback";
+
+export interface IntentResult {
+  intent: Intent;
+  confidence: number; // 0..1
+  source: IntentSource;
+  matched?: string;   // mot/expression qui a déclenché le match (debug)
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1) NORMALISATION
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function normalizeTunisian(text: string): string {
+  if (!text) return "";
+
+  let t = text;
+
+  // 1. Unicode NFD + suppression des diacritiques latins (é → e)
+  t = t.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  // 2. Tashkeel arabe (fatha, damma, kasra, sukun, shadda, tanwin)
+  t = t.replace(/[\u064B-\u065F\u0670]/g, "");
+
+  // 3. Tatweel ـ
+  t = t.replace(/\u0640/g, "");
+
+  // 4. Normalisation alphabétique arabe
+  t = t
+    .replace(/[\u0623\u0625\u0622\u0671]/g, "\u0627") // أ إ آ ٱ → ا
+    .replace(/\u0649/g, "\u064A")                       // ى → ي
+    .replace(/\u0629/g, "\u0647")                       // ة → ه
+    .replace(/\u0624/g, "\u0648")                       // ؤ → و
+    .replace(/\u0626/g, "\u064A");                      // ئ → ي
+
+  // 5. Lowercase + ponctuation → espace
+  t = t.toLowerCase();
+  t = t.replace(/[؟?!.,،؛:;'"`(){}\[\]<>«»…—–]/g, " ");
+
+  // 6. Réduire les répétitions extrêmes (ahlaaaa → ahlaa, hhhhhh → hh)
+  t = t.replace(/([a-z\u0600-\u06FF])\1{2,}/g, "$1$1");
+
+  // 7. Espaces multiples
+  t = t.replace(/\s+/g, " ").trim();
+
+  return t;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2) MOTS-CLÉS PAR INTENT
+//    Chaque liste est dédupliquée à l'init. Les chaînes sont déjà au format
+//    "post-normalisation" (pas d'accent, pas de tashkeel, lowercase).
+// ─────────────────────────────────────────────────────────────────────────────
+
+// ── greeting ────────────────────────────────────────────────────────────────
+const greetingWords: string[] = [
+  // Arabe
+  "عسلامه", "عسلامة",
+  "السلام", "السلام عليكم", "سلام عليكم",
+  "مرحبا", "مرحبا بيك", "مرحبا بكم",
+  "اهلا", "اهلا بيك", "اهلا وسهلا",
+  "صباح الخير", "صباح النور",
+  "مساء الخير", "مساء النور",
+  "يا هلا",
+
+  // Arabizi (tounsi en lettres latines)
+  "3aslema", "aaslema", "asslema", "aslema",
+  "salam", "slm", "slem",
+  "ahla", "ahla bik", "ahla biik", "ahla wa sahla",
+  "marhba", "mar7ba", "marhba bik", "mar7ba bik",
+  "sbeh el khir", "sbeh lkhir", "sbe7 el khir", "sbe7 lkhir",
+  "sba7 el khir", "sba7 lkhir", "sbah el khir", "sbah lkhir",
+  "msa el khir", "msa lkhir", "mse el khir", "mese el khir",
+  "masa el khir", "masa lkhir",
+
+  // FR / EN / court
+  "salut", "slt", "cc", "coucou",
+  "bonjour", "bjr", "bonsoir", "bsr",
+  "hello", "helo", "hi", "hey", "yo", "hola",
+];
+
+// ── bot_identity ────────────────────────────────────────────────────────────
+const identityWords: string[] = [
+  // Arabe
+  "شكون انت", "شكون انتي", "شكون انتوما",
+  "شنوه انت", "شنوه انتي",
+  "انت شكون", "انتي شكون",
+  "هذا شكون", "مع شكون",
+  "انت بوت", "انتي بوت",
+  "انت روبو", "انتي روبو",
+  "انت مساعد", "انتي مساعد",
+  "اشكون انت", "اشكون انتي",
+
+  // Arabizi
+  "chkoun enta", "chkoun enti", "chkoun inty",
+  "chkoun nta", "chkoun nti",
+  "chkun enta", "chkun enti",
+  "chkon enta", "chkon enti",
+  "chkoon enta", "chkoon enti",
+  "chnowa enti", "chnowa enta",
+  "chneya enti", "chneya enta",
+  "chniya enti", "chniya enta",
+  "enta chkoun", "enti chkoun",
+  "nta chkoun", "nti chkoun",
+  "enta bot", "enti bot",
+  "enta robot", "enti robot",
+  "enta ai", "enti ai",
+
+  // FR / EN
+  "c qui", "ces qui", "tes qui", "t es qui", "t'es qui",
+  "qui es tu", "qui est tu", "qui es-tu",
+  "tu es qui", "tu es quoi", "tu es un bot", "tes un bot",
+  "who are you", "what are you", "are you a bot",
+];
+
+// ── how_are_you ─────────────────────────────────────────────────────────────
+// Ces patterns sont sensibles aux faux positifs ("ça va ma commande ?").
+// On laisse le filtre "domain words" (plus bas) décider de remettre en LLM.
+const howAreYouWords: string[] = [
+  // Arabe
+  "شنحوالك", "شنو احوالك", "شنوه احوالك",
+  "لاباس", "لابس", "شنوه لاباس",
+  "كيفك", "كيف حالك", "كيفاش حالك",
+  "امورك", "اخبارك",
+
+  // Arabizi
+  "chnahwelek", "chna7welek",
+  "chniya ahwelek", "chnowa ahwelek", "chnowa a7welek",
+  "labes", "lebes", "labess", "labas",
+  "kifek", "kifech", "kif 7alek", "kif halek",
+  "kifech 7alek", "kifech halek",
+  "omourek", "akhberek", "akhbarek",
+  "chniya l7keya", "chniya lhkeya",
+
+  // FR
+  "ca va", "cv", "sa va", "sava",
+  "comment ca va", "comment vas tu", "comment vas-tu",
+  "tu vas bien",
+  "how are you", "how r u", "how are u",
+];
+
+// ── thanks ──────────────────────────────────────────────────────────────────
+const thanksWords: string[] = [
+  // Arabe
+  "شكرا", "شكرا ليك", "شكرا بزاف",
+  "يعطيك الصحه", "يعطيك صحه",
+  "بارك الله فيك",
+  "مرسي", "مرسي بزاف",
+  "عيشك", "تعيش", "تعيشي",
+
+  // Arabizi
+  "merci", "merci bcp", "merci beaucoup", "mrc",
+  "thx", "thanks", "thank you", "ty",
+  "yaatik saha", "ya3tik saha", "yatik saha",
+  "ya3tik essaha", "yaatik essaha",
+  "3aychek", "aychek", "3aychik", "aychik",
+  "barakallah fik", "barak allah fik",
+];
+
+// ── goodbye ─────────────────────────────────────────────────────────────────
+// On évite "سلام" / "salem" tout seuls ici (déjà ambigus avec greeting) :
+// la priorité ci-dessous met goodbye avant greeting uniquement pour les mots
+// vraiment non ambigus.
+const goodbyeWords: string[] = [
+  // Arabe
+  "باي", "باي باي",
+  "في امان الله", "بالسلامه", "ربي معاك",
+  "تصبح على خير", "تصبحي على خير",
+
+  // Arabizi
+  "bye", "bye bye", "bay", "ciao", "tchao",
+  "beslema", "bslama", "bessalama",
+  "fi aman allah", "fi aman ellah",
+  "tisba7 3la khir", "tisbah ala khir",
+
+  // FR / EN
+  "au revoir", "à bientot", "a bientot", "à plus", "a plus", "a+",
+  "bonne journee", "bonne soiree", "bonne nuit",
+  "see you", "see u", "cya", "good bye",
+];
+
+// ── BLOCAGE FAUX POSITIFS ──────────────────────────────────────────────────
+// Si le texte normalisé contient un de ces mots ET que l'intent matché est
+// "soft" (greeting / how_are_you / thanks), on baisse la confiance et on
+// RECOMMANDE de laisser le LLM router (source = "regex_low").
+const businessKeywords: string[] = [
+  // FR
+  "commande", "commandes", "livraison", "livre", "livrer",
+  "prix", "tarif", "facture", "paiement", "payer",
+  "stock", "dispo", "disponibilite", "disponible",
+  "verre", "verres", "lentille", "lentilles", "monture", "montage",
+  "client", "code", "reference", "ref", "bon", "bc", "precal",
+  "retour", "remboursement", "reclamation", "rdv", "rendez vous",
+  "agence", "opticien", "vendeur", "porteur",
+  "suivi", "tracker", "track", "statut",
+  // Arabizi / tounsi courant
+  "kommanda", "commenda", "kommonda", "fatoura", "fatoora",
+  // Arabe
+  "كومند", "كوماند", "طلبيه", "طلبية",
+  "فاتوره", "فاتورة", "سعر", "ثمن",
+  "توصيل", "ارجاع", "استرجاع",
+];
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3) COMPILATION DES REGEX (avec frontières mots Unicode-safe)
+// ─────────────────────────────────────────────────────────────────────────────
+
+function escapeRegex(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Les bornes \b ne marchent pas sur l'arabe → on encadre par
+// "début de chaîne / espace" et "fin de chaîne / espace / ponctuation déjà
+// transformée en espace lors de la normalisation".
+function makeRegex(words: string[]): RegExp {
+  const norm = Array.from(
+    new Set(words.map((w) => normalizeTunisian(w)).filter(Boolean))
+  );
+  // tri par longueur décroissante : "ahla bik" doit matcher avant "ahla"
+  norm.sort((a, b) => b.length - a.length);
+  const escaped = norm.map(escapeRegex);
+  return new RegExp(`(?:^|\\s)(${escaped.join("|")})(?:\\s|$)`, "iu");
+}
+
+// PRIORITÉ : bot_identity > thanks > goodbye > how_are_you > greeting
+const patterns: { intent: Intent; regex: RegExp }[] = [
+  { intent: "bot_identity", regex: makeRegex(identityWords) },
+  { intent: "thanks",       regex: makeRegex(thanksWords) },
+  { intent: "goodbye",      regex: makeRegex(goodbyeWords) },
+  { intent: "how_are_you",  regex: makeRegex(howAreYouWords) },
+  { intent: "greeting",     regex: makeRegex(greetingWords) },
+];
+
+const businessRegex = makeRegex(businessKeywords);
+
+// Bruit / messages quasi vides → unknown direct
+const noiseRegex = /^(?:wa|w|a{1,5}|h{2,}|ه{2,}|ok|oki|kk|k|\?|؟)$/iu;
+
+// Intents "soft" qui peuvent être démotés s'il y a un mot métier à côté
+const SOFT_INTENTS: Set<Intent> = new Set([
+  "greeting",
+  "how_are_you",
+  "thanks",
+]);
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4) API PUBLIQUE
+// ─────────────────────────────────────────────────────────────────────────────
+
+export function detectIntentDetailed(input: string): IntentResult {
+  const text = normalizeTunisian(input);
+
+  if (!text || noiseRegex.test(text)) {
+    return { intent: "unknown", confidence: 0.2, source: "fallback" };
+  }
+
+  for (const p of patterns) {
+    const m = p.regex.exec(text);
+    if (!m) continue;
+
+    const matched = m[1];
+
+    // Anti faux-positifs : "ça va ma commande ?", "merci pour la livraison",
+    // "salut, où est ma commande" → on laisse le LLM décider.
+    if (SOFT_INTENTS.has(p.intent) && businessRegex.test(text)) {
+      return {
+        intent: p.intent,
+        confidence: 0.45,
+        source: "regex_low",
+        matched,
+      };
+    }
+
+    return {
+      intent: p.intent,
+      confidence: 0.92,
+      source: "regex",
+      matched,
+    };
+  }
+
+  return { intent: "unknown", confidence: 0.1, source: "fallback" };
+}
+
+// API historique : conservée à l'identique pour ne rien casser.
+export function detectIntent(input: string): Intent {
+  return detectIntentDetailed(input).intent;
+}
+
+// Helper pour le routeur : true => ne pas répondre via replyTunisian,
+// laisser le LLM (intent classifier + génération) prendre la main.
+export function shouldDeferToLLM(input: string): boolean {
+  const r = detectIntentDetailed(input);
+  return r.source !== "regex" || r.intent === "unknown";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5) RÉPONSES TOUTES PRÊTES (uniquement pour les matches "regex" francs)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const REPLIES: Record<Intent, string[]> = {
+  greeting: [
+    "عسلامة 👋 مرحبا بيك في OptiFlow. كيفاش نجم نعاونك؟",
+    "أهلا وسهلا، نجم نعاونك في suivi commande، création commande، stock ولا prix.",
+    "مرحبا بيك، قولّي شنوة تحب تعمل: تتابع commande ولا تعدّي commande جديدة؟",
+  ],
+  bot_identity: [
+    "أنا assistant OptiFlow، نعاونك في commandes، suivi، disponibilité، livraison و prix.",
+    "أنا chatbot متاع OptiFlow. نجم نعاونك في suivi commande، création commande، stock، RX و PRECAL.",
+    "أنا مساعد OptiFlow، نخدم معاك بالتونسي والفرنسي باش نسهّل عليك الطلبات والمتابعة.",
+  ],
+  how_are_you: [
+    "لاباس الحمد لله، يعطيك الصحة 😊 كيفاش نجم نعاونك؟",
+    "لاباس، موجود نعاونك. تحب تتابع commande ولا تعمل commande جديدة؟",
+    "الحمد لله، إنت شنوة تحتاج اليوم؟",
+  ],
+  thanks: [
+    "عيشك، مرحبا بيك ديما 😊",
+    "يعطيك الصحة، أي حاجة أخرى أنا موجود.",
+    "مرسي ليك، نجم نعاونك في حاجة أخرى؟",
+  ],
+  goodbye: [
+    "يعطيك الصحة، نهارك زين 👋",
+    "باي، مرحبا بيك في أي وقت.",
+    "في أمان الله، نهارك مبروك.",
+  ],
+  unknown: [
+    "سامحني، ما فهمتش مليح. تحب تتابع commande ولا تعدّي commande جديدة؟",
+    "نجم نعاونك، أما وضّحلي شوية: suivi commande، création commande، disponibilité ولا prix؟",
+    "ما فهمتش القصد بالضبط. اكتبلي رقم commande ولا code client ونعاونك.",
+  ],
+};
+
+export function replyTunisian(input: string): string {
+  const intent = detectIntent(input);
+  const list = REPLIES[intent];
+  return list[Math.floor(Math.random() * list.length)];
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6) EXEMPLE D'INTÉGRATION CÔTÉ APPELANT (à recopier dans ton chat service)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// import {
+//   detectIntentDetailed,
+//   replyTunisian,
+// } from "./tunisianPatterns";
+//
+// async function handleUserMessage(text: string): Promise<string> {
+//   const r = detectIntentDetailed(text);
+//
+//   // 1) Match franc → réponse instantanée, pas d'appel LLM
+//   if (r.source === "regex") {
+//     return replyTunisian(text);
+//   }
+//
+//   // 2) Match low-confidence ou aucun match → LLM (déjà entraîné)
+//   //    Le LLM sait reconnaître d'autres salutations non listées dans la regex
+//   //    ET sait router correctement les vraies demandes métier.
+//   return await callLLM(text);
+// }
+// tunisianPatterns.ts
+
+export type Intent =
+  | "greeting"
+  | "bot_identity"
+  | "how_are_you"
+  | "thanks"
+  | "goodbye"
+  | "unknown";
+
+export function normalizeTunisian(text: string): string {
+  return text
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[؟?!.,،؛:;'"(){}\[\]<>]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const greetingWords = [
+  // Arabic
+  "عسلامة",
+  "السلام",
+  "السلام عليكم",
+  "سلام",
+  "سلام عليكم",
+  "مرحبا",
+  "اهلا",
+  "أهلا",
+  "اهلا بيك",
+  "صباح الخير",
+  "صباح النور",
+  "مساء الخير",
+  "مساء النور",
+
+  // Arabizi
+  "3aslema",
+  "asslema",
+  "aslema",
+  "aaslema",
+  "salam",
+  "slm",
+  "slem",
+  "salem",
+  "ahla",
+  "ahla bik",
+  "marhba",
+  "mar7ba",
+  "sbeh el khir",
+  "sbeh lkhir",
+  "sbe7 el khir",
+  "sbe7 lkhir",
+  "mse el khir",
+  "masa el khir",
+
+  // French/short
+  "salut",
+  "slt",
+  "cc",
+  "coucou",
+  "hello",
+  "hi",
+];
+
+const identityWords = [
+  // Arabic
+  "شكون انت",
+  "شكون انتي",
+  "شكون انتوما",
+  "شنوة انت",
+  "شنوة انتي",
+  "انت شكون",
+  "انتي شكون",
+  "هذا شكون",
+  "مع شكون",
+  "انت بوت",
+  "انتي بوت",
+  "انت روبو",
+  "انتي روبو",
+
+  // Arabizi
+  "chkoun enta",
+  "chkoun enti",
+  "chkoun inty",
+  "chkoun nta",
+  "chkoun nti",
+  "chkun enta",
+  "chkun enti",
+  "chkon enta",
+  "chkon enti",
+  "chkoon enta",
+  "chkoon enti",
+  "chnowa enti",
+  "chnowa enta",
+  "chneya enti",
+  "chneya enta",
+  "chniya enti",
+  "chniya enta",
+  "enta chkoun",
+  "enti chkoun",
+  "nta chkoun",
+  "nti chkoun",
+  "ca chkoun",
+  "c chkoun",
+  "c qui",
+  "t es qui",
+  "tes qui",
+  "who are you",
+  "enta bot",
+  "enti bot",
+  "enta robot",
+  "enti robot",
+];
+
+const howAreYouWords = [
+  // Arabic
+  "شنحوالك",
+  "شنو احوالك",
+  "شنوة احوالك",
+  "لاباس",
+  "لابس",
+  "كيفك",
+  "كيف حالك",
+  "امورك",
+  "شنوة لاباس",
+
+  // Arabizi
+  "chnahwelek",
+  "chna7welek",
+  "chniya ahwelek",
+  "chnowa ahwelek",
+  "chnowa a7welek",
+  "labes",
+  "lebes",
+  "labess",
+  "cv",
+  "ca va",
+  "ça va",
+  "sa va",
+  "sava",
+  "kifek",
+  "kifech",
+  "kif 7alek",
+  "kif halek",
+  "omourek",
+  "chniya l7keya",
+];
+
+const thanksWords = [
+  // Arabic
+  "شكرا",
+  "يعطيك الصحة",
+  "بارك الله فيك",
+  "مرسي",
+  "عيشك",
+  "تعيش",
+
+  // Arabizi
+  "merci",
+  "thx",
+  "thanks",
+  "yaatik saha",
+  "ya3tik saha",
+  "yatik saha",
+  "3aychek",
+  "aychek",
+  "3aychik",
+  "barakallah fik",
+];
+
+const goodbyeWords = [
+  // Arabic
+  "سلام",
+  "باي",
+  "في امان الله",
+  "يعطيك الصحة",
+
+  // Arabizi
+  "bye",
+  "bay",
+  "ciao",
+  "salem",
+  "beslema",
+  "bslama",
+  "fi aman allah",
+];
+
+function makeRegex(words: string[]): RegExp {
+  const escaped = words.map((w) =>
+    w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
+  );
+
+  return new RegExp(`(^|\\s)(${escaped.join("|")})(\\s|$)`, "iu");
+}
+
+const patterns: { intent: Intent; regex: RegExp }[] = [
+  { intent: "greeting", regex: makeRegex(greetingWords) },
+  { intent: "bot_identity", regex: makeRegex(identityWords) },
+  { intent: "how_are_you", regex: makeRegex(howAreYouWords) },
+  { intent: "thanks", regex: makeRegex(thanksWords) },
+  { intent: "goodbye", regex: makeRegex(goodbyeWords) },
+];
+
+export function detectIntent(input: string): Intent {
+  const text = normalizeTunisian(input);
+
+  // messages très courts / bruit
+  if (/^(wa|w|a|aa|aaa|هه|hhhh|ok|oki|o?k|؟|\?)$/iu.test(text)) {
+    return "unknown";
+  }
+
+  for (const p of patterns) {
+    if (p.regex.test(text)) return p.intent;
+  }
+
+  return "unknown";
+}
+
+export function replyTunisian(input: string): string {
+  const intent = detectIntent(input);
+
+  const replies: Record<Intent, string[]> = {
+    greeting: [
+      "عسلامة 👋 مرحبا بيك في OptiFlow. كيفاش نجم نعاونك؟",
+      "أهلا وسهلا، نجم نعاونك في suivi commande، création commande، stock ولا prix.",
+      "مرحبا بيك، قولّي شنوة تحب تعمل: تتابع commande ولا تعدّي commande جديدة؟",
+    ],
+
+    bot_identity: [
+      "أنا assistant OptiFlow، نعاونك في commandes، suivi، disponibilité، livraison و prix.",
+      "أنا chatbot متاع OptiFlow. نجم نعاونك في suivi commande، création commande، stock، RX و PRECAL.",
+      "أنا مساعد OptiFlow، نخدم معاك بالتونسي والفرنسي باش نسهّل عليك الطلبات والمتابعة.",
+    ],
+
+    how_are_you: [
+      "لاباس الحمد لله، يعطيك الصحة 😊 كيفاش نجم نعاونك؟",
+      "لاباس، موجود نعاونك. تحب تتابع commande ولا تعمل commande جديدة؟",
+      "الحمد لله، إنت شنوة تحتاج اليوم؟",
+    ],
+
+    thanks: [
+      "عيشك، مرحبا بيك ديما 😊",
+      "يعطيك الصحة، أي حاجة أخرى أنا موجود.",
+      "مرسي ليك، نجم نعاونك في حاجة أخرى؟",
+    ],
+
+    goodbye: [
+      "يعطيك الصحة، نهارك زين 👋",
+      "باي، مرحبا بيك في أي وقت.",
+      "في أمان الله، نهارك مبروك.",
+    ],
+
+    unknown: [
+      "سامحني، ما فهمتش مليح. تحب تتابع commande ولا تعدّي commande جديدة؟",
+      "نجم نعاونك، أما وضّحلي شوية: suivi commande، création commande، disponibilité ولا prix؟",
+      "ما فهمتش القصد بالضبط. اكتبلي رقم commande ولا code client ونعاونك.",
+    ],
+  };
+
+  const list = replies[intent];
+  return list[Math.floor(Math.random() * list.length)];
+}

@@ -14,3 +14,7 @@ data/history/
 data/processed/
 reports/
 __pycache__/
+llm/data/tounsi_raw/derja_unified_raw_corpus.jsonl
+llm/data/tounsi_raw/linto_text_ar_tn.jsonl
+data/tounsi_raw/derja_unified_raw_corpus.jsonl
+data/tounsi_raw/linto_text_ar_tn.jsonl

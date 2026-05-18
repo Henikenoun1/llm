@@ -48,7 +48,7 @@
     "default": "You are Mohsen, a real SIVO Essilor Tunisia call-center agent. SIVO serves opticians only. Deliveries go to the optician agency, never directly to the final patient. For create_order and order_tracking, ask for num_client first when missing. Confirm optical values before final validation. Never invent stock, status, price, or ETA; call tools or say clearly that confirmation is pending.",
     "arabic": "إنت محسن، عامل حقيقي في مركز نداء SIVO Essilor تونس. SIVO يزوّد opticiens فقط، والتسليم يكون لوكالة الحريف opticien موش للمريض مباشرة. في suivi commande و create_order، إذا num_client موش موجود اطلبو أول حاجة. ثبّت القيم البصرية (OD/OG, sphere, cylindre, axe, addition) قبل validation. ما تخممش وما تخترعش stock ولا statut ولا prix ولا délai، استعمل tools وإلا قول بصراحة ما نجمش نأكد توة.",
     "arabizi": "Inti Mohsen, agent 7a9i9i fi SIVO Essilor Tunisia call center. SIVO ykhdem m3a el opticiens bark, w livraison temchi ll agence mta3 el opticien moch ll patient. Fi suivi commande w create_order, ken num_client mawjoudch, otlbou awal haja. Qabel validation, athbet OD/OG, sphere, cyl, axe, addition. Ma tkhammemch w ma tkatherch stock/statut/prix/delai; esta3mel tools wala 9oul bel wadh ma tnajjemch t2akked tawa.",
-    "french": "Réponds en français naturel et professionnel quand le message utilisateur est en français. Pour le suivi de commande, utilise des badges statut exacts, du Markdown simple lisible dans le frontend, et ne demande pas le code client s'il est déjà présent dans la session.",
+    "french": "Réponds en français naturel et professionnel quand le message utilisateur est en français. Pour le suivi de commande, utilise des badges statut exacts, du Markdown simple lisible dans le chat, et ne demande pas le code client s'il est déjà présent dans la session.",
     "code_switch": "Tu es Mohsen, agent call-center SIVO Essilor. Réponds en darja tunisienne + français métier naturel, sans style robotique. Priorité: identifier num_client, collecter juste les slots utiles, confirmer OD/OG et addition avant validation. Rappeler que livraison se fait vers agence opticien avec ETA approximatif selon secteur. Zéro invention sur stock/statut/prix/délais.",
     "business_critical": "For business-critical intents (create_order, order_tracking, delivery_schedule, availability_inquiry, reference_confirmation): ask exactly one clarification at a time, keep responses concise, and force explicit recap before final confirmation."
   },
@@ -332,10 +332,23 @@
       "مرحبا",
       "أهلا",
       "اهلا",
+      "ahla",
+      "ahla bik",
+      "marhba",
+      "marhbe",
+      "mar7ba",
       "bonjour",
       "salut",
+      "slt",
+      "cc",
+      "coucou",
       "hello",
       "hi",
+      "hey",
+      "yo",
+      "bjr",
+      "bonsoir",
+      "bsr",
       "cv",
       "شنحوالك",
       "كيفاش",
@@ -407,12 +420,23 @@
       "نطلب",
       "commander",
       "nouvelle commande",
-      "نعمل طلبية",
+      "نعمل كوموند",
       "نحب نعمل commande",
       "نحب نعدي commande",
       "passer commande",
       "commande import",
-      "illico"
+      "illico",
+      "je veux faire une commande",
+      "je veux passer une commande",
+      "je voudrais commander",
+      "nheb naorder",
+      "n7eb naorder",
+      "nheb npassi",
+      "n7eb npassi",
+      "namel commande",
+      "n3amel commande",
+      "nabghi commande",
+      "bghit npassi"
     ],
     "order_creation": [
       "نعمل كوموند",
@@ -420,7 +444,7 @@
       "نطلب",
       "commander",
       "nouvelle commande",
-      "نعمل طلبية",
+      "نعمل كوموند",
       "نحب نعمل commande",
       "نحب نعدي commande",
       "passer commande",
@@ -467,6 +491,71 @@
       "thanks",
       "يعيشك",
       "يعطيك الصحة"
+    ]
+  },
+  "semantic_intent_model": "paraphrase-multilingual-MiniLM-L12-v2",
+  "semantic_intent_threshold": 0.35,
+  "intent_examples": {
+    "greeting": [
+      "ahla", "ahla bik", "marhba", "mar7ba", "marhbe", "aslema", "slt", "cc", "coucou",
+      "hi", "hello", "hey", "bonjour", "salut", "bonsoir", "bsr", "bjr", "yo",
+      "سلام", "عسلامة", "مرحبا", "أهلا", "اهلا", "الو", "allo",
+      "wech rak", "labas", "kif rak", "sah", "wa3lik salam", "heya", "ey",
+      "sabbah el khir", "sbah el khir", "masa el khir",
+      "salam 3lik", "salam 3likom", "tfaddhal", "w 3lik"
+    ],
+    "order_tracking": [
+      "wein commandi", "win commandi", "fein commandi", "wein commande",
+      "3lech commandi", "chnia hal commandi", "suivi commande", "statut commande",
+      "waqtach tousel", "imta tousel", "waqtach el livraison",
+      "commande wein hi", "je veux suivre ma commande", "track order",
+      "commande arrivée", "bon de commande wein", "bdc mte3i",
+      "chnia le statut", "commandi wein weslet", "check commande",
+      "كوموندي وين", "وين الكوموند", "وقتاش توصل", "حالة الكوموند"
+    ],
+    "create_order": [
+      "bghit npassi commande", "nheb npassi commande", "ncreii commande",
+      "nouvelle commande", "passer une commande", "commander des verres",
+      "ncommand", "nocmand", "amel commande", "hebli commande",
+      "nheb n3amal commande", "bghit n3amal order", "je veux commander",
+      "نعمل كوموند", "نطلب", "نحب نعمل commande",
+      "commande import", "طلب جديد",
+      "nheb npassi commande", "n7eb npassi commande", "n7eb na3mel commande",
+      "n7eb norder", "bghit naorder", "namel commande", "namel order",
+      "je voudrais passer une commande", "je veux faire une commande",
+      "nabghi npassi commande", "n7ab n3ddi commande", "commande nouvelle",
+      "envoyer commande", "soumettre commande", "valider commande"
+    ],
+    "thanks": [
+      "merci", "shokran", "chokran", "yeslem", "يسلمو", "barak allahu fik",
+      "thanks", "thank you", "mrc", "3aychek", "ya3tik saha", "shoukran",
+      "merci beaucoup", "merci bien", "rahmet allahu fik", "yaaychek",
+      "شكرا", "مرسي", "يعطيك الصحة",
+      "ya3tik saha bro", "yarhamek rabbi", "yaaychek rabbi", "3ichek",
+      "katlouk baraka", "rabbi ykhalilek", "mille merci", "un grand merci",
+      "je vous remercie", "je te remercie", "nickel merci", "trop bien merci"
+    ],
+    "goodbye": [
+      "besslema", "bislama", "ciao", "bye", "tchaw", "au revoir", "bonne journée",
+      "bonne soirée", "a bientot", "salut", "à plus", "farewell",
+      "بالسلامة", "مع السلامة", "وداعا", "tcha tcha"
+    ],
+    "price_inquiry": [
+      "9adech ythamen", "bi9addech", "9addech", "soum", "essoum", "thamen", "thman",
+      "prix", "combien", "tarif", "cost", "coût", "ça coûte combien",
+      "9addech el prix", "chnia el prix", "قداش", "بقداش", "سعر",
+      "qadech el verre", "c komb"
+    ],
+    "availability_inquiry": [
+      "mawjoud", "mawjouda", "dispo", "disponible", "en stock", "fi stock",
+      "bech nlaqah", "nlaqah", "mnein nlaqah", "fi stock",
+      "موجود", "متوفر", "فيه ولا لا", "kayen walla le",
+      "fabrication", "délai fabrication", "متى يتوفر"
+    ],
+    "clarify_need": [
+      "chnia el khidma mte3kum", "kifech najem n3awen",
+      "chnia el service", "qu est ce que vous faites",
+      "chnia ta3mel had el service", "elkhidma mte3kum chnia hi"
     ]
   },
   "business_keywords": [
@@ -678,19 +767,19 @@
     "ask_num_client": [
       "عسلامة، قبل كل شي عطيني num client باش نثبت الملف.",
       "مرحبا، مدلي برقم الحريف باش نجم نكمل معاك.",
-      "أهلا بيك، نحب num client الأول وبعد نثبت الطلبية.",
+      "أهلا بيك، نحب num client الأول وبعد نثبت الكوموند.",
       "Marhbe bik, 3atini num client loul bach nthabet el dossier.",
       "Bonjour, il faut num client d'abord bach nthabet el dossier w nkammel ma3ak."
     ],
     "tracking_found": [
-      "ثبتّ الطلبية، حالتها {status}. إذا تحب نعطيك زادة délai نقلك.",
+      "ثبتّ الكوموند، حالتها {status}. إذا تحب نعطيك زادة délai نقلك.",
       "الcommande موجودة وحالتها {status}.",
       "حسب السيستام، bon de commande {order_id} حالياً {status}."
     ],
     "creation_recap": [
       "نعاودلك التفاصيل قبل validation: {recap}.",
       "باش ما نغلطوش، هذا اللي ثبت عندي: {recap}.",
-      "مريقل، نلخصلك الطلبية: {recap}. إذا صحيح نعديها."
+      "مريقل، نلخصلك الكوموند: {recap}. إذا صحيح نعديها."
     ]
   },
   "slot_patterns": {

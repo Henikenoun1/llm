@@ -22,7 +22,7 @@ scikit-learn==1.5.2
 # Data / Utils
 pandas==2.2.3
 pyarrow==18.0.0
-numpy>=1.26.4
+numpy==1.26.4
 rank-bm25==0.2.2
 jsonschema==4.23.0
 requests==2.32.3
@@ -38,3 +38,6 @@ pydantic==2.10.3
 httpx==0.28.1
 SQLAlchemy==2.0.36
 psycopg[binary]==3.2.3
+# --- Privacy/PII protection ---
+presidio-analyzer
+presidio-anonymizer
