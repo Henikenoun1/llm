@@ -352,6 +352,23 @@ You can override behavior through `.env`:
 - `PIPELINE_STAGE` (default `full`)
 - `SERVE_AFTER` (`1` or `0`)
 - `CALL_CENTER_API_HOST`, `CALL_CENTER_API_PORT`
+- `OPTIFLOW_BACKEND_BASE_URL` for the exposed Nest backend base URL
+- `OPTIFLOW_TRACK_ORDER_URL` only if you want to override the exact tool endpoint
+
+VM example with the backend already exposed:
+
+```bash
+OPTIFLOW_BACKEND_BASE_URL=https://5nc1c6vh-3001.euw.devtunnels.ms
+OPTIFLOW_TRACK_ORDER_URL=
+CALL_CENTER_API_HOST=0.0.0.0
+CALL_CENTER_API_PORT=8000
+```
+
+Behavior:
+
+- if `OPTIFLOW_TRACK_ORDER_URL` is set, it is used as-is
+- otherwise the LLM automatically builds `OPTIFLOW_BACKEND_BASE_URL/api/chatbot/tools/track-order`
+- you can expose the LLM later without changing this backend integration again
 
 The application still works without a database, but production readiness validation now marks DB as required (`required_for_production=true` in domain config).
 

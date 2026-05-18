@@ -127,11 +127,16 @@ export class ChatService {
     }
 
     const host = window.location.hostname;
-    if (host.includes('devtunnels.ms')) {
+    const isLocalHost = host === 'localhost' || host === '127.0.0.1';
+    if (window.location.port === '8001') {
       return '/api';
     }
 
-    if (host === 'localhost' || host === '127.0.0.1') {
+    if (host.includes('devtunnels.ms') || (!isLocalHost && window.location.protocol.startsWith('http'))) {
+      return '/api';
+    }
+
+    if (isLocalHost) {
       return 'http://localhost:8000';
     }
 
@@ -153,12 +158,56 @@ export class ChatService {
     return this.sessionId;
   }
 
+  private resolveUserContext(): Record<string, unknown> {
+    const context: Record<string, unknown> = {};
+    const append = (key: string, value: unknown): void => {
+      if (value !== undefined && value !== null && String(value).trim() !== '') {
+        context[key] = value;
+      }
+    };
+
+    const runtimeSession = (window as Window & { __OPTIFLOW_USER_SESSION__?: Record<string, unknown> })
+      .__OPTIFLOW_USER_SESSION__;
+    if (runtimeSession && typeof runtimeSession === 'object') {
+      Object.entries(runtimeSession).forEach(([key, value]) => append(key, value));
+    }
+
+    try {
+      for (const storageKey of ['optiflow_user_session', 'optiflowUserSession', 'user_session', 'user']) {
+        const raw = localStorage.getItem(storageKey);
+        if (!raw) {
+          continue;
+        }
+        const parsed = JSON.parse(raw) as Record<string, unknown>;
+        if (parsed && typeof parsed === 'object') {
+          Object.entries(parsed).forEach(([key, value]) => append(key, value));
+        }
+      }
+      append('ACCESS_TOKEN', localStorage.getItem('access_token') ?? localStorage.getItem('accessToken'));
+    } catch {
+      // Ignore malformed localStorage values.
+    }
+
+    const query = new URLSearchParams(window.location.search);
+    append('USER_ID', query.get('userId'));
+    append('USER_PRENOM', query.get('prenom'));
+    append('USER_NOM', query.get('nom'));
+    append('USER_ROLE', query.get('role'));
+    append('USER_CODE_CLIENT', query.get('codeClient'));
+    append('USER_AGENCE', query.get('agence'));
+    append('ACCESS_TOKEN', query.get('accessToken'));
+    append('BACKEND_URL', query.get('backendUrl'));
+
+    return context;
+  }
+
   sendMessage(message: string, modelVariant: string, runtimeMode: string): Observable<ChatResponse> {
     return this.http.post<ChatResponse>(`${this.api}/chat`, {
       message,
       session_id: this.sessionId,
       model_variant: modelVariant,
       runtime_mode: runtimeMode,
+      user_context: this.resolveUserContext(),
     });
   }
 

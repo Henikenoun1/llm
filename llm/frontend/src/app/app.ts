@@ -105,6 +105,77 @@ export class App {
     this.refreshRuntime();
   }
 
+  renderMessageText(text: string): string {
+    return this.renderMarkdownLite(text);
+  }
+
+  private renderMarkdownLite(text: string): string {
+    const lines = this.escapeHtml(text).split(/\r?\n/);
+    const chunks: string[] = [];
+
+    for (let index = 0; index < lines.length; index += 1) {
+      const line = lines[index];
+      if (this.isTableLine(line) && index + 1 < lines.length && this.isTableSeparator(lines[index + 1])) {
+        const header = this.tableCells(line);
+        const rows: string[][] = [];
+        index += 2;
+        while (index < lines.length && this.isTableLine(lines[index])) {
+          rows.push(this.tableCells(lines[index]));
+          index += 1;
+        }
+        index -= 1;
+        chunks.push(this.renderTable(header, rows));
+        continue;
+      }
+
+      chunks.push(this.renderInline(line));
+    }
+
+    return chunks.join('<br>');
+  }
+
+  private escapeHtml(value: string): string {
+    return value
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  }
+
+  private renderInline(value: string): string {
+    return value
+      .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+      .replace(/\*(.+?)\*/g, '<em>$1</em>')
+      .replace(/\[([^\]]+)\]/g, '<span class="action-pill">$1</span>');
+  }
+
+  private isTableLine(value: string): boolean {
+    const trimmed = value.trim();
+    return trimmed.startsWith('|') && trimmed.endsWith('|');
+  }
+
+  private isTableSeparator(value: string): boolean {
+    return /^\|[\s:\-|]+\|$/.test(value.trim());
+  }
+
+  private tableCells(value: string): string[] {
+    return value
+      .trim()
+      .replace(/^\|/, '')
+      .replace(/\|$/, '')
+      .split('|')
+      .map((cell) => this.renderInline(cell.trim()));
+  }
+
+  private renderTable(header: string[], rows: string[][]): string {
+    const head = `<thead><tr>${header.map((cell) => `<th>${cell}</th>`).join('')}</tr></thead>`;
+    const body = `<tbody>${rows
+      .map((row) => `<tr>${row.map((cell) => `<td>${cell}</td>`).join('')}</tr>`)
+      .join('')}</tbody>`;
+    return `<div class="message-table-wrap"><table class="message-table">${head}${body}</table></div>`;
+  }
+
   @HostListener('window:resize')
   onViewportResize(): void {
     if (this.isWideViewport()) {

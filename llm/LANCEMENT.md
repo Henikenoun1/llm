@@ -103,6 +103,17 @@ Variables utiles (dans `.env`):
 - `PIPELINE_STAGE` (par defaut `full`)
 - `SERVE_AFTER` (par defaut `1`)
 - `CALL_CENTER_API_HOST` et `CALL_CENTER_API_PORT`
+- `OPTIFLOW_BACKEND_BASE_URL` pour le backend Nest expose
+- `OPTIFLOW_TRACK_ORDER_URL` seulement si vous voulez forcer l'endpoint exact
+
+Exemple VM avec backend deja expose:
+
+```bash
+OPTIFLOW_BACKEND_BASE_URL=https://5nc1c6vh-3001.euw.devtunnels.ms
+OPTIFLOW_TRACK_ORDER_URL=
+CALL_CENTER_API_HOST=0.0.0.0
+CALL_CENTER_API_PORT=8000
+```
 
 ## 8. Fichiers a changer plus tard pour adapter le contexte
 
