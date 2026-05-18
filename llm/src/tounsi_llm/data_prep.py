@@ -634,7 +634,7 @@ def _build_augmented_intent_conversations(
             "assistant": [
                 "حاضر، ثبتّ num client {num_client}. نراجع: {product} / {material} / {treatment} diamètre {diameter}. نزيد نثبت القيم {optics} قبل validation finale.",
                 "وصلت، creation commande جاهزة مبدئيا. باش نأكد slots المهمة واحدة بواحدة: produit, traitement, diamètre والقيم البصرية.",
-                "مريقل، نجم نكمّل draft للطلبية متاع {num_client}. ما نبعثش نهائي إلا بعد recap واضح للـ OD/OG والتسليم للوكالة.",
+                "مريقل، نجم نكمّل draft للكوموند متاع {num_client}. ما نبعثش نهائي إلا بعد recap واضح للـ OD/OG والتسليم للوكالة.",
             ],
         },
         "delivery_schedule": {
@@ -658,7 +658,7 @@ def _build_augmented_intent_conversations(
             "assistant": [
                 "نثبتلك référence {reference} من catalog/RAG ونرجعلك بالproduit الصحيح بلا تخمين.",
                 "أكيد، تو نعمل confirmation للكود {reference}. إذا مش واضح نقلك صراحة ما نجمش نأكد.",
-                "وصلت، نتحقق من code {lens_code} ونمدك بالمعلومة الدقيقة قبل ما تكمل الطلبية.",
+                "وصلت، نتحقق من code {lens_code} ونمدك بالمعلومة الدقيقة قبل ما تكمل الكوموند.",
             ],
         },
         "availability_inquiry": {
@@ -677,7 +677,7 @@ def _build_augmented_intent_conversations(
             "user": [
                 "aslema, nheb suivi commande ama ma andich num client tawa.",
                 "bonjour, عندي demande urgente على commande, chnowa أول معلومة تلزم؟",
-                "سلام، نحب نعدي طلبية جديدة, najem n9olek details direct?",
+                "سلام، نحب نعدي كوموند جديدة, najem n9olek details direct?",
             ],
             "assistant": [
                 "مرحبا، أول خطوة تعطيني num client باش نفتح dossier الصحيح وبعدها نكمل معاك الطلب.",
@@ -1373,7 +1373,7 @@ def _build_rejected_dpo_response(prompt: str, chosen: str) -> str:
             normalized,
             [
                 "مريقل، نبعث commande توة من غير recap للـ OD/OG ولا ما نثبت num client.",
-                "ما يلزمنا حتى تأكيد إضافي، نكمل الطلبية مباشرة حتى كان القيم ناقصة.",
+                "ما يلزمنا حتى تأكيد إضافي، نكمل الكوموند مباشرة حتى كان القيم ناقصة.",
                 "خلاص نعديها نهائية من غير ما نراجع sphere ولا cylindre ولا addition.",
             ],
         )

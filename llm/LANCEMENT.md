@@ -44,16 +44,7 @@ ou
 python run_pipeline.py --stage promote --prod-source-variant dpo
 ```
 
-## 4. Frontend
-
-```bash
-cd frontend
-npm install
-npm run build
-npm start
-```
-
-## 5. Endpoints utiles
+## 4. Endpoints utiles
 
 - `POST /chat`
 - `POST /chat/recommendation`
@@ -65,7 +56,7 @@ npm start
 - `POST /rating`
 - `POST /admin/corrections`
 
-## 6. Base de donnees
+## 5. Base de donnees
 
 ```bash
 cp .env.example .env
@@ -84,7 +75,7 @@ Sans Docker ou sans permission sur le socket Docker:
 bash scripts/start_local_postgres.sh
 ```
 
-## 7. Bootstrap VM en une commande
+## 6. Bootstrap VM en une commande
 
 Linux VM:
 
@@ -115,7 +106,7 @@ CALL_CENTER_API_HOST=0.0.0.0
 CALL_CENTER_API_PORT=8000
 ```
 
-## 8. Fichiers a changer plus tard pour adapter le contexte
+## 7. Fichiers a changer plus tard pour adapter le contexte
 
 - `data/config/domain.json`
 - `data/config/few_shots.jsonl`

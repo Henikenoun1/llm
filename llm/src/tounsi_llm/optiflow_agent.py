@@ -23,20 +23,28 @@ from .optiflow_manifest import OPTIFLOW_TOOLS, get_optiflow_tool, list_optiflow_
 INTENT_TO_OPTIFLOW_TOOL: dict[str, str] = {
     "track_order": "track_order",
     "order_status": "track_order",
+    "order_tracking": "track_order",
     "suivi_commande": "track_order",
+    "reference_confirmation": "track_order",
     "list_my_orders": "get_my_orders",
     "get_my_orders": "get_my_orders",
     "list_orders": "get_my_orders",
+    "mes_commandes": "get_my_orders",
     "search_orders": "search_orders",
     "find_order": "search_orders",
+    "recherche_commande": "search_orders",
     "order_detail": "get_order_detail",
     "get_order_detail": "get_order_detail",
+    "detail_commande": "get_order_detail",
     "client_orders": "get_orders_by_client",
     "orders_by_client": "get_orders_by_client",
+    "commandes_client": "get_orders_by_client",
     "verify_client": "verify_client",
     "client_lookup": "verify_client",
+    "get_num_client": "verify_client",
     "opticien_profile": "get_opticien_profile",
     "my_profile": "get_opticien_profile",
+    "profil_opticien": "get_opticien_profile",
 }
 
 
@@ -89,6 +97,146 @@ def _missing_required(tool_name: str, args: dict[str, Any]) -> list[str]:
         return []
     required = tool.get("parameters", {}).get("required", []) or []
     return [name for name in required if args.get(name) in (None, "")]
+
+
+def _order_payload(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    data = result.get("data")
+    if not isinstance(data, dict):
+        return {}
+    if isinstance(data.get("order"), dict):
+        return data["order"]
+    return data
+
+
+def _merge_order_payload(base: dict[str, Any], detail: dict[str, Any]) -> dict[str, Any]:
+    if not detail:
+        return base
+    merged = dict(base or {})
+    for key, value in detail.items():
+        if value not in (None, "", [], {}):
+            merged[key] = value
+    return merged
+
+
+def _detail_id_candidates(order: dict[str, Any], args: dict[str, Any]) -> list[str]:
+    candidates = [
+        order.get("id"),
+        order.get("commandeId"),
+        order.get("_id"),
+        order.get("uuid"),
+        order.get("numCmd"),
+        order.get("reference"),
+        args.get("reference"),
+    ]
+    out: list[str] = []
+    for value in candidates:
+        text = str(value or "").strip()
+        if text and text not in out:
+            out.append(text)
+    return out
+
+
+def _first_search_item(result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(result, dict):
+        return {}
+    data = result.get("data") if isinstance(result.get("data"), dict) else {}
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    if not items:
+        items = data.get("data") if isinstance(data.get("data"), list) else []
+    if items and isinstance(items[0], dict):
+        return items[0]
+    return {}
+
+
+def _enrich_tracking_with_detail(
+    observation: dict[str, Any],
+    *,
+    args: dict[str, Any],
+    access_token: str,
+    backend_url: str,
+    user_role: str = "",
+) -> dict[str, Any]:
+    """Best-effort enrichment of the public track_order response.
+
+    track_order returns only public fields (no internal id, no prescription).
+    To produce the WOW card, we look up the same reference via:
+      - search_orders (ADMIN/OPERATEUR) → items[0] (rich payload + id)
+      - get_my_orders (OPTICIEN)        → items[0] (rich payload + id)
+    Then we optionally chain get_order_detail(id) for the canonical detail.
+    All calls are best-effort; failures never break the existing track_order card.
+    """
+    if observation.get("status") != "ok" or not access_token:
+        return observation
+    order = _order_payload(observation)
+    reference = str(order.get("reference") or args.get("reference") or "").strip()
+    role = (user_role or "").upper()
+
+    rich_item: dict[str, Any] = {}
+    rich_source = ""
+    if reference:
+        # Try the role-appropriate resolver first, then fall back to the other.
+        candidates_tools: list[str] = []
+        if role in {"ADMIN", "OPERATEUR", "AGENT"}:
+            candidates_tools = ["search_orders", "get_my_orders"]
+        else:
+            candidates_tools = ["get_my_orders", "search_orders"]
+        for tool_name in candidates_tools:
+            envelope = execute_optiflow_tool(
+                name=tool_name,
+                args={"num_cmd": reference},
+                access_token=access_token,
+                backend_url=backend_url,
+                timeout_s=4,
+            )
+            if envelope.get("status") == "ok":
+                item = _first_search_item(envelope)
+                if item:
+                    rich_item = item
+                    rich_source = tool_name
+                    break
+
+    candidates: list[str] = []
+    if rich_item.get("id"):
+        candidates.append(str(rich_item["id"]))
+    candidates.extend(_detail_id_candidates(order, args))
+
+    detail_payload: dict[str, Any] = {}
+    detail_envelope: dict[str, Any] = {}
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        envelope = execute_optiflow_tool(
+            name="get_order_detail",
+            args={"id": candidate},
+            access_token=access_token,
+            backend_url=backend_url,
+            timeout_s=4,
+        )
+        if envelope.get("status") != "ok":
+            continue
+        detail_payload = _order_payload(envelope)
+        if detail_payload:
+            detail_envelope = envelope
+            break
+
+    if not rich_item and not detail_payload:
+        return observation
+
+    enriched = dict(observation)
+    merged = dict(order)
+    if rich_item:
+        merged = _merge_order_payload(merged, rich_item)
+        enriched["rich_result_source"] = rich_source
+    if detail_payload:
+        merged = _merge_order_payload(merged, detail_payload)
+        enriched["detail_result"] = detail_envelope
+        enriched["detail_source"] = "get_order_detail"
+    enriched["data"] = merged
+    return enriched
 
 
 def decide_tool(
@@ -171,6 +319,14 @@ def run_optiflow_agent_step(
         access_token=access_token or None,
         backend_url=backend_url,
     )
+    if tool_name == "track_order" and access_token:
+        observation = _enrich_tracking_with_detail(
+            observation,
+            args=decision["arguments"],
+            access_token=access_token,
+            backend_url=backend_url,
+            user_role=str(user_context.get("USER_ROLE") or ""),
+        )
     return {
         "tool_call": {"name": tool_name, "arguments": decision["arguments"]},
         "tool_result": observation,

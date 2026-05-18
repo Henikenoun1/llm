@@ -1,0 +1,13 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "serve-llm-backend-8001",
+			"type": "shell",
+			"command": "OPTIFLOW_BACKEND_BASE_URL=https://5nc1c6vh-3001.euw.devtunnels.ms/ OPTIFLOW_TRACK_ORDER_URL= CALL_CENTER_DATABASE_URL=sqlite:////home/ahmed/llm_test/llm-ahmed/llm/data/history/callcenter.sqlite3 PYTHONUNBUFFERED=1 /home/ahmed/llm_test/.venv/bin/python /home/ahmed/llm_test/llm-ahmed/llm/run_pipeline.py --stage serve --host 0.0.0.0 --port 8001",
+			"isBackground": true,
+			"problemMatcher": [],
+			"group": "build"
+		}
+	]
+}

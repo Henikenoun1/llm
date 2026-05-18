@@ -12,7 +12,6 @@ Production-oriented, configurable call-center LLM stack with:
 - vector RAG with chunking and optional FAISS backend
 - persistent conversation memory, ratings, admin corrections, and learning buffers
 - optional SQL database persistence for sessions, conversations, feedbacks, ratings, and live corrections
-- Angular frontend with model variants and runtime modes
 
 ## Real Pipeline
 
@@ -56,7 +55,6 @@ src/tounsi_llm/
 
 run_pipeline.py
 scripts/train.py
-frontend/
 docker-compose.yml
 ```
 
