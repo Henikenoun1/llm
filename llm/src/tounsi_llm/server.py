@@ -16,7 +16,7 @@ from .memory import ConversationMemoryStore
 from .rag import VectorRAGRetriever
 from .recommendation import process_recommendation_turn, recommendation_stats, reset_recommendation_sessions
 from .storage import get_database_backend
-from .tools import ToolRegistry, get_tool_registry
+from .tools import ToolRegistry, build_order_invoice, get_tool_registry, validate_order_form_submission
 
 
 app = FastAPI(title="Configurable Call Center LLM", version="3.0")
@@ -85,6 +85,7 @@ class ChatResponse(BaseModel):
     latency_ms: float
     tool_call: dict | None = None
     tool_result: dict | None = None
+    ui_action: dict | None = None
     rag_results: list[dict] = []
     memory_hits: list[dict] = []
     session_state: dict = {}
@@ -96,6 +97,29 @@ class ChatResponse(BaseModel):
     response_script_detected: str = "arabic"
     correction_applied: bool = False
     routing_reason: str = ""
+
+
+class OrderSubmitRequest(BaseModel):
+    session_id: str
+    order_id: str
+    fields: dict[str, Any] | list[dict[str, Any]]
+    strict: bool = True
+    confirm: bool = False
+
+
+class OrderSubmitResponse(BaseModel):
+    status: str
+    order_id: str
+    submitted: bool = False
+    needs_confirmation: bool = False
+    missing_fields: list[str] = []
+    recommended_missing: list[str] = []
+    errors: list[dict[str, Any]] = []
+    recap: str | None = None
+    form: dict | None = None
+    slots: dict[str, Any] = {}
+    invoice: dict | None = None
+    ui_action: dict | None = None
 
 class FeedbackRequest(BaseModel):
     session_id: str
@@ -202,6 +226,21 @@ def _set_context_aliases(context: dict[str, Any], canonical: str, aliases: list[
         context.setdefault(alias, text)
 
 
+def _normalize_form_fields(fields: dict[str, Any] | list[dict[str, Any]]) -> dict[str, Any]:
+    if isinstance(fields, dict):
+        return dict(fields)
+    normalized: dict[str, Any] = {}
+    for item in fields:
+        if not isinstance(item, dict):
+            continue
+        name = item.get("name")
+        if not name:
+            continue
+        if "value" in item and item["value"] not in (None, "", []):
+            normalized[name] = item["value"]
+    return normalized
+
+
 @app.post("/chat", response_model=ChatResponse)
 async def chat(
     req: ChatRequest,
@@ -276,6 +315,7 @@ async def chat(
         latency_ms=result["latency_ms"],
         tool_call=tool_call,
         tool_result=result.get("tool_result"),
+        ui_action=result.get("ui_action"),
         rag_results=result.get("rag_results", []),
         memory_hits=result.get("memory_hits", []),
         session_state=result.get("session_state", {}),
@@ -287,6 +327,63 @@ async def chat(
         response_script_detected=result.get("response_script_detected", "arabic"),
         correction_applied=result.get("correction_applied", False),
         routing_reason=result["intent"],
+    )
+
+
+@app.post("/orders/submit", response_model=OrderSubmitResponse)
+async def submit_order(req: OrderSubmitRequest, _: None = Depends(_authorize)) -> OrderSubmitResponse:
+    assert _memory_store is not None
+    assert _tool_registry is not None
+
+    payload = _normalize_form_fields(req.fields)
+    result = validate_order_form_submission(payload, order_id=req.order_id, strict=req.strict)
+
+    invoice = None
+    ui_action = None
+    if req.confirm and result.get("status") == "pending_confirmation" and not result.get("errors"):
+        slots = result.get("slots", {})
+        price_info = None
+        if slots.get("product") and slots.get("index"):
+            price_info = _tool_registry.get_price(
+                product=str(slots.get("product")),
+                index=str(slots.get("index")),
+                treatment=slots.get("treatment"),
+                city=slots.get("city"),
+            )
+            if isinstance(price_info, dict) and price_info.get("status") != "ok":
+                price_info = None
+
+        invoice = build_order_invoice(slots, order_id=req.order_id, price_info=price_info)
+        ui_action = {"type": "invoice", "payload": invoice}
+        result["status"] = "confirmed"
+        result["submitted"] = True
+        result["needs_confirmation"] = False
+        result["invoice"] = invoice
+
+    _memory_store.update_session_state(
+        req.session_id,
+        intent="create_order",
+        slots=result.get("slots", {}),
+        missing_slots=result.get("missing_fields", []),
+        review_required=bool(result.get("errors")),
+        tool_call={"name": "create_order", "args": result.get("slots", {})},
+        tool_result=result,
+        clear_task_state=False,
+    )
+
+    return OrderSubmitResponse(
+        status=result.get("status", "validation_failed"),
+        order_id=result.get("order_id", req.order_id),
+        submitted=bool(result.get("submitted", False)),
+        needs_confirmation=bool(result.get("needs_confirmation", False)),
+        missing_fields=result.get("missing_fields", []),
+        recommended_missing=result.get("recommended_missing", []),
+        errors=result.get("errors", []),
+        recap=result.get("recap"),
+        form=result.get("form"),
+        slots=result.get("slots", {}),
+        invoice=invoice,
+        ui_action=ui_action,
     )
 
 

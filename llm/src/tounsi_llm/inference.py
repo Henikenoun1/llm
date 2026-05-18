@@ -801,6 +801,44 @@ def _preferred_response_script(user_text: str) -> str:
     return "arabic"
 
 
+def _presidio_language_for_text(text: str) -> str:
+    if _looks_like_french_text(text):
+        return "fr"
+    script = _detect_script_like(text)
+    if script == "arabic":
+        return "ar"
+    if script in {"mixed", "arabizi"}:
+        return "fr" if _looks_like_french_text(text) else "en"
+    return "en"
+
+
+def _privacy_block_response(target_script: str) -> str:
+    if target_script == "french":
+        return "S'il te plait, evite d'inclure des donnees sensibles dans ton message."
+    if target_script == "arabizi":
+        return "Bellehi 3aychek, klemek ma yelzemouch ykoun fih data sensible."
+    if target_script == "mixed":
+        return "بلاهي عايشك، كلامك ما يلزمش يكون فيه data sensible."
+    return "بلاهي عايشك، كلامك ما يلزمش يكون فيه معطيات حساسة."
+
+
+def _apply_presidio_to_response(text: str, target_script: str) -> str:
+    if not text:
+        return text
+    language = _presidio_language_for_text(text)
+    filtered, entities = presidio_filter(text, language=language)
+    return filtered if entities else text
+
+
+def _build_ui_action_from_tool_result(tool_result: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(tool_result, dict):
+        return None
+    form = tool_result.get("form")
+    if not isinstance(form, dict):
+        return None
+    return {"type": "form", "payload": form}
+
+
 def _script_instruction(target_script: str) -> str:
     if target_script == "french":
         return (
@@ -1818,7 +1856,10 @@ def route_to_tool(intent: str, slots: dict[str, Any]) -> tuple[str | None, dict[
     if intent == "delivery_schedule" and not any(slots.get(field) for field in ["agence", "city", "secteur"]):
         missing = ["agence"]
     tool_name = DOMAIN_CFG.get("intent_to_tool", {}).get(intent)
-    if missing or not tool_name:
+    allow_partial = intent in {"create_order", "order_creation"} and bool(tool_name)
+    if (missing or not tool_name) and not allow_partial:
+        return None, {}, missing
+    if not tool_name:
         return None, {}, missing
 
     tool_args = {slot: slots.get(slot) for slot in required}
@@ -3128,23 +3169,38 @@ def _render_controlled_response(
         )
 
     if intent in {"create_order", "order_creation"}:
-        if tool_status == "collecting":
+        if tool_status in {"collecting", "form_required"}:
             missing_from_tool = [str(item) for item in tool_result.get("missing_fields", []) if item] if isinstance(tool_result, dict) else []
+            order_id = _first_non_empty((tool_result or {}).get("order_id") if isinstance(tool_result, dict) else None, (tool_result or {}).get("draft_id") if isinstance(tool_result, dict) else None)
             if missing_from_tool:
-                return _missing_slot_prompt(missing_from_tool[0], target_script)
+                slot_label = _slot_label(missing_from_tool[0], target_script)
+                return _script_text(
+                    target_script,
+                    arabic=f"فتحتلك formulaire للcommande{f' {order_id}' if order_id else ''}. كمّل {slot_label} في الفورمة باش نكمل.",
+                    latin=f"7allit formulaire lel commande{f' {order_id}' if order_id else ''}. Kammel {slot_label} fil forma bach nkammel.",
+                    french=f"Commande {order_id or ''} : j'ai ouvert un formulaire pour completer {slot_label}.",
+                )
+            return _script_text(
+                target_script,
+                arabic=f"فتحتلك formulaire للcommande{f' {order_id}' if order_id else ''}. كمّل المعطيات في الفورمة باش نكمل.",
+                latin=f"7allit formulaire lel commande{f' {order_id}' if order_id else ''}. Kammel el ma3tiyet fil forma bach nkammel.",
+                french=f"Commande {order_id or ''} : j'ai ouvert un formulaire dans le chat pour completer les champs.",
+            )
         recommended_missing = [str(item) for item in (tool_result or {}).get("recommended_missing", []) if item] if isinstance(tool_result, dict) else []
-        draft_id = _first_non_empty((tool_result or {}).get("draft_id") if isinstance(tool_result, dict) else None)
+        order_id = _first_non_empty((tool_result or {}).get("order_id") if isinstance(tool_result, dict) else None, (tool_result or {}).get("draft_id") if isinstance(tool_result, dict) else None)
         recap_text = _first_non_empty((tool_result or {}).get("recap") if isinstance(tool_result, dict) else None, recap)
         if recommended_missing:
             return _script_text(
                 target_script,
-                arabic=f"حضرتلك draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. وزادة يلزمني {_slot_label(recommended_missing[0], target_script)} باش يكون الملف واضح.",
-                latin=f"Hadhartlek draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. W zeda yelzemni {_slot_label(recommended_missing[0], target_script)} bach ykoun el dossier wadha.",
+                arabic=f"Commande{f' {order_id}' if order_id else ''}: {recap_text}. كمّل {_slot_label(recommended_missing[0], target_script)} في الفورمة باش نكمل.",
+                latin=f"Commande{f' {order_id}' if order_id else ''}: {recap_text}. Kammel {_slot_label(recommended_missing[0], target_script)} fil forma bach nkammel.",
+                french=f"Commande {order_id or ''} : {recap_text}. J'ai ouvert un formulaire pour completer les champs.",
             )
         return _script_text(
             target_script,
-            arabic=f"مريقل، حضرتلك draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. إذا كل شي صحيح نكمل confirmation.",
-            latin=f"Mriguel, hadhartlek draft commande{f' {draft_id}' if draft_id else ''}: {recap_text}. Ken kol chay s7i7 nkammel confirmation.",
+            arabic=f"Commande{f' {order_id}' if order_id else ''}: {recap_text}. إذا كل شي صحيح نكمل confirmation.",
+            latin=f"Commande{f' {order_id}' if order_id else ''}: {recap_text}. Ken kol chay s7i7 nkammel confirmation.",
+            french=f"Commande {order_id or ''} : {recap_text}. Dites-moi si je confirme.",
         )
 
     if intent == "availability_inquiry":
@@ -3615,13 +3671,40 @@ def production_infer(
     normalized_user_context = _normalize_user_context(user_context)
     runtime_mode = _resolve_runtime_mode(runtime_mode)
     # --- Presidio privacy filter ---
-    filtered_text, detected_entities = presidio_filter(user_text)
+    presidio_language = _presidio_language_for_text(user_text)
+    filtered_text, detected_entities = presidio_filter(user_text, language=presidio_language)
     user_script = _detect_script_like(filtered_text)
     target_script = _preferred_response_script(filtered_text)
 
     text = normalize_text(filtered_text)
     explicit_topic_reset = _is_explicit_topic_reset(text)
     session_state = memory_store.get_session_state(session_id) if memory_store and session_id else {}
+    state_summary = _summarize_session_state(session_state)
+    if detected_entities:
+        latency = round((time.perf_counter() - start) * 1000, 1)
+        logger.info(
+            "Presidio blocked input: entities=%s",
+            [str(entity.get("entity_type")) for entity in detected_entities],
+        )
+        return {
+            "response": _privacy_block_response(target_script),
+            "intent": "unknown",
+            "slots": {},
+            "tool_call": None,
+            "tool_result": None,
+            "rag_results": [],
+            "memory_hits": [],
+            "missing_slots": [],
+            "session_state": state_summary,
+            "needs_human_review": False,
+            "latency_ms": latency,
+            "model_variant": model_variant,
+            "runtime_mode": runtime_mode,
+            "response_source": "privacy_block",
+            "response_script_target": target_script,
+            "response_script_detected": target_script,
+            "correction_applied": False,
+        }
     extracted_slots = extract_slots(text)
     recovered_slots = _recover_missing_slots_from_turn(text, extracted_slots, session_state)
     if recovered_slots:
@@ -3629,7 +3712,6 @@ def production_infer(
     raw_intent = infer_intent(text, extracted_slots=extracted_slots)
     intent, slots, clear_task_state = _resolve_turn_state(text, raw_intent, extracted_slots, session_state)
     slots = _apply_user_context_to_slots(intent, slots, normalized_user_context)
-    state_summary = _summarize_session_state(session_state)
     rag_results: list[dict[str, Any]] = []
     try:
         rag_results = retriever.search(text, top_k=CFG.retrieval_top_k)
@@ -3697,6 +3779,7 @@ def production_infer(
     if intent == "get_num_client" and not slots.get("num_client"):
         missing_slots = ["num_client"]
     auto_execute_tool = _should_execute_tool_for_mode(intent, missing_slots, runtime_mode)
+    force_create_order_form = tool_name == "create_order" and intent in {"create_order", "order_creation"}
 
     # ── OptiFlow agent override ───────────────────────────────────────────
     # When the LLM intent matches a canonical OptiFlow tool AND the request
@@ -3729,7 +3812,7 @@ def production_infer(
     if not optiflow_used:
         tool_result = (
             tool_registry.execute(tool_name, tool_args, context=normalized_user_context)
-            if tool_name and auto_execute_tool else None
+            if tool_name and (auto_execute_tool or force_create_order_form) else None
         )
     if isinstance(tool_result, dict):
         tool_missing = [str(item) for item in tool_result.get("missing_fields", []) if item]
@@ -3880,6 +3963,8 @@ def production_infer(
         response = _get_fallback_response("unclear", target_script=target_script)
         response_source = "fallback"
 
+    response = _apply_presidio_to_response(response, target_script)
+
     tool_status = str((tool_result or {}).get("status", "")).lower() if isinstance(tool_result, dict) else ""
     needs_human_review = bool(missing_slots) or bool(tool_name and not auto_execute_tool and runtime_mode != "collect_execute")
     if tool_status in {"error", "verification_failed", "not_found"}:
@@ -3908,12 +3993,15 @@ def production_infer(
         latency,
     )
 
+    ui_action = _build_ui_action_from_tool_result(tool_result)
+
     return {
         "response": response,
         "intent": intent,
         "slots": slots,
         "tool_call": {"name": tool_name, "args": tool_args} if tool_name else None,
         "tool_result": tool_result,
+        "ui_action": ui_action,
         "rag_results": rag_results,
         "memory_hits": memory_hits,
         "missing_slots": missing_slots,

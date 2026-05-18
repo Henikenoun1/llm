@@ -12,6 +12,7 @@ import json
 import random
 import re
 import string
+from datetime import datetime, timezone
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
@@ -55,6 +56,10 @@ def _draft_id(prefix: str = "DRF") -> str:
     return prefix + "-" + "".join(random.choices(string.ascii_uppercase + string.digits, k=8))
 
 
+def _order_id(prefix: str = "CMD") -> str:
+    return prefix + "-" + "".join(random.choices(string.digits, k=9))
+
+
 def _compact_dict(payload: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in payload.items() if value not in (None, "", [], {})}
 
@@ -72,6 +77,300 @@ def _material_treatment_tokens(slots: dict[str, Any]) -> list[str]:
     if slots.get("addition"):
         values.append(f"addition={slots['addition']}")
     return values
+
+
+_ORDER_REQUIRED_FIELDS = ["num_client", "product"]
+_ORDER_PRIORITY_OPTIONS = {"normale", "illico"}
+_ORDER_FIELD_SPECS = [
+    {"name": "num_client", "label": "Client code", "type": "text", "required": True},
+    {"name": "product", "label": "Product", "type": "text", "required": True},
+    {"name": "reference", "label": "Reference", "type": "text", "required": False},
+    {"name": "lens_code", "label": "Lens code", "type": "text", "required": False},
+    {"name": "material", "label": "Material", "type": "text", "required": False},
+    {"name": "index", "label": "Index", "type": "text", "required": False},
+    {"name": "treatment", "label": "Treatment", "type": "text", "required": False},
+    {"name": "color", "label": "Color", "type": "text", "required": False},
+    {"name": "diameter", "label": "Diameter", "type": "text", "required": False},
+    {"name": "quantity", "label": "Quantity", "type": "number", "required": False},
+    {
+        "name": "priority",
+        "label": "Priority",
+        "type": "select",
+        "required": False,
+        "options": ["normale", "illico"],
+    },
+    {"name": "addition", "label": "Addition", "type": "text", "required": False},
+    {"name": "od_sphere", "label": "OD sphere", "type": "text", "required": False},
+    {"name": "od_cyl", "label": "OD cyl", "type": "text", "required": False},
+    {"name": "od_axis", "label": "OD axis", "type": "text", "required": False},
+    {"name": "og_sphere", "label": "OG sphere", "type": "text", "required": False},
+    {"name": "og_cyl", "label": "OG cyl", "type": "text", "required": False},
+    {"name": "og_axis", "label": "OG axis", "type": "text", "required": False},
+]
+_ORDER_FIELD_NAMES = {spec["name"] for spec in _ORDER_FIELD_SPECS}
+_ORDER_ALNUM_RE = re.compile(r"^[A-Z0-9-]+$")
+
+
+def _order_line_description(slots: dict[str, Any]) -> str:
+    parts: list[str] = []
+    if slots.get("product"):
+        parts.append(str(slots["product"]))
+    if slots.get("material"):
+        parts.append(f"material {slots['material']}")
+    if slots.get("index"):
+        parts.append(f"index {slots['index']}")
+    if slots.get("treatment"):
+        parts.append(f"treatment {slots['treatment']}")
+    if slots.get("color"):
+        parts.append(f"color {slots['color']}")
+    if slots.get("diameter"):
+        parts.append(f"diameter {slots['diameter']}")
+    if slots.get("reference"):
+        parts.append(f"ref {slots['reference']}")
+    if slots.get("lens_code"):
+        parts.append(f"lens {slots['lens_code']}")
+    return " / ".join(parts) if parts else "Commande optique"
+
+def _build_order_form_fields(slots: dict[str, Any]) -> list[dict[str, Any]]:
+    form_fields: list[dict[str, Any]] = []
+    for spec in _ORDER_FIELD_SPECS:
+        field = dict(spec)
+        value = slots.get(spec["name"])
+        if value not in (None, "", []):
+            field["value"] = value
+        form_fields.append(field)
+    return form_fields
+
+
+def _build_order_form_payload(
+    order_id: str,
+    *,
+    slots: dict[str, Any],
+    missing_fields: list[str],
+    recommended_missing: list[str],
+) -> dict[str, Any]:
+    return {
+        "type": "order_form",
+        "order_id": order_id,
+        "title": f"Commande {order_id}",
+        "submit_label": "Envoyer",
+        "fields": _build_order_form_fields(slots),
+        "required_fields": _ORDER_REQUIRED_FIELDS,
+        "missing_fields": missing_fields,
+        "recommended_missing": recommended_missing,
+    }
+
+
+def build_order_invoice(
+    slots: dict[str, Any],
+    *,
+    order_id: str,
+    price_info: dict[str, Any] | None = None,
+    currency: str = "TND",
+) -> dict[str, Any]:
+    issued_at = datetime.now(timezone.utc).isoformat()
+    quantity = _parse_int(slots.get("quantity")) or 1
+
+    line_item: dict[str, Any] = {
+        "description": _order_line_description(slots),
+        "quantity": quantity,
+        "reference": slots.get("reference"),
+        "lens_code": slots.get("lens_code"),
+    }
+    line_item = _compact_dict(line_item)
+
+    price_payload: dict[str, Any] = {"status": "pending"}
+    if isinstance(price_info, dict) and price_info.get("status") == "ok":
+        unit_min = _parse_float(price_info.get("price_min_dt"))
+        unit_max = _parse_float(price_info.get("price_max_dt"))
+        price_payload = {
+            "status": "ok",
+            "currency": currency,
+            "unit_price_min_dt": unit_min,
+            "unit_price_max_dt": unit_max,
+        }
+        if unit_min is not None:
+            price_payload["line_total_min_dt"] = round(unit_min * quantity, 2)
+        if unit_max is not None:
+            price_payload["line_total_max_dt"] = round(unit_max * quantity, 2)
+
+    optics = {
+        key: slots.get(key)
+        for key in [
+            "od_sphere",
+            "od_cyl",
+            "od_axis",
+            "og_sphere",
+            "og_cyl",
+            "og_axis",
+            "addition",
+        ]
+        if slots.get(key) not in (None, "", [])
+    }
+
+    return _compact_dict(
+        {
+            "type": "invoice",
+            "invoice_id": f"FAC-{order_id}",
+            "order_id": order_id,
+            "issued_at": issued_at,
+            "currency": currency,
+            "customer": _compact_dict({"num_client": slots.get("num_client")}),
+            "items": [line_item],
+            "price": price_payload,
+            "recap": ", ".join(_material_treatment_tokens(slots)) or "core request captured",
+            "optics": optics,
+            "notes": [
+                "Commande a confirmer par le backoffice.",
+                "Livraison vers agence opticien, pas vers le porteur final.",
+            ],
+        }
+    )
+
+
+def _order_recommended_missing(slots: dict[str, Any]) -> list[str]:
+    recommended_missing: list[str] = []
+    product_text = str(slots.get("product", "")).lower()
+    if not slots.get("material") and not slots.get("index"):
+        recommended_missing.append("material_or_index")
+    if not slots.get("diameter"):
+        recommended_missing.append("diameter")
+    if any(keyword in product_text for keyword in ["progressive", "bifocal", "top 28"]) and not slots.get("addition"):
+        recommended_missing.append("addition")
+    if any(slots.get(field) for field in ["od_sphere", "od_cyl", "od_axis"]) and not any(
+        slots.get(field) for field in ["og_sphere", "og_cyl", "og_axis"]
+    ):
+        recommended_missing.append("og_values_or_confirmation")
+    if any(slots.get(field) for field in ["og_sphere", "og_cyl", "og_axis"]) and not any(
+        slots.get(field) for field in ["od_sphere", "od_cyl", "od_axis"]
+    ):
+        recommended_missing.append("od_values_or_confirmation")
+    return recommended_missing
+
+
+def _parse_float(value: Any) -> float | None:
+    try:
+        return float(str(value).replace(",", ".").strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_int(value: Any) -> int | None:
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_order_form_submission(
+    fields: dict[str, Any],
+    *,
+    order_id: str,
+    strict: bool = True,
+) -> dict[str, Any]:
+    slots = canonicalize_slots(fields)
+    missing_fields = [field for field in _ORDER_REQUIRED_FIELDS if not slots.get(field)]
+    errors: list[dict[str, str]] = []
+
+    if strict:
+        unknown_fields = sorted(set(slots) - _ORDER_FIELD_NAMES)
+        for field in unknown_fields:
+            errors.append({"field": field, "code": "unknown_field", "message": "Unknown field."})
+        if unknown_fields:
+            slots = {key: value for key, value in slots.items() if key in _ORDER_FIELD_NAMES}
+
+        num_client = slots.get("num_client")
+        if num_client is not None and not str(num_client).isdigit():
+            errors.append({"field": "num_client", "code": "invalid_format", "message": "num_client must be digits."})
+
+        product = slots.get("product")
+        if product is not None and len(str(product).strip()) < 2:
+            errors.append({"field": "product", "code": "invalid_format", "message": "product is too short."})
+
+        for key in ["reference", "lens_code"]:
+            value = slots.get(key)
+            if value is not None:
+                normalized = str(value).replace(" ", "").upper()
+                if not _ORDER_ALNUM_RE.match(normalized):
+                    errors.append({"field": key, "code": "invalid_format", "message": f"{key} must be alphanumeric."})
+
+        if slots.get("priority") and slots.get("priority") not in _ORDER_PRIORITY_OPTIONS:
+            errors.append({"field": "priority", "code": "invalid_value", "message": "priority must be normale or illico."})
+
+        quantity = slots.get("quantity")
+        if quantity is not None:
+            parsed = _parse_int(quantity)
+            if parsed is None or parsed <= 0:
+                errors.append({"field": "quantity", "code": "invalid_value", "message": "quantity must be a positive integer."})
+
+        diameter = slots.get("diameter")
+        if diameter is not None:
+            parsed = _parse_int(diameter)
+            if parsed is None or parsed < 40 or parsed > 90:
+                errors.append({"field": "diameter", "code": "invalid_value", "message": "diameter must be between 40 and 90."})
+
+        index = slots.get("index")
+        if index is not None:
+            parsed = _parse_float(index)
+            if parsed is None or parsed < 1.0 or parsed > 2.5:
+                errors.append({"field": "index", "code": "invalid_value", "message": "index must be a numeric value."})
+
+        addition = slots.get("addition")
+        if addition is not None:
+            parsed = _parse_float(addition)
+            if parsed is None or parsed < 0:
+                errors.append({"field": "addition", "code": "invalid_value", "message": "addition must be a positive number."})
+
+        for key in ["od_sphere", "od_cyl", "og_sphere", "og_cyl"]:
+            value = slots.get(key)
+            if value is not None and _parse_float(value) is None:
+                errors.append({"field": key, "code": "invalid_value", "message": f"{key} must be numeric."})
+
+        for key in ["od_axis", "og_axis"]:
+            value = slots.get(key)
+            if value is not None:
+                parsed = _parse_int(value)
+                if parsed is None or parsed < 0 or parsed > 180:
+                    errors.append({"field": key, "code": "invalid_value", "message": f"{key} must be between 0 and 180."})
+
+        for prefix in ["od", "og"]:
+            cyl = slots.get(f"{prefix}_cyl")
+            axis = slots.get(f"{prefix}_axis")
+            if cyl is not None and axis is None:
+                errors.append({"field": f"{prefix}_axis", "code": "missing_field", "message": f"{prefix}_axis is required when {prefix}_cyl is set."})
+            if axis is not None and cyl is None:
+                errors.append({"field": f"{prefix}_cyl", "code": "missing_field", "message": f"{prefix}_cyl is required when {prefix}_axis is set."})
+
+    recommended_missing = _order_recommended_missing(slots)
+    recap_items = _material_treatment_tokens(slots)
+    recap = ", ".join(recap_items) if recap_items else "core request captured"
+
+    if errors:
+        status = "validation_failed"
+    elif missing_fields:
+        status = "form_required"
+    else:
+        status = "pending_confirmation"
+
+    result = {
+        "status": status,
+        "order_id": order_id,
+        "submitted": False,
+        "needs_confirmation": status == "pending_confirmation",
+        "missing_fields": missing_fields,
+        "recommended_missing": recommended_missing,
+        "errors": errors,
+        "recap": recap,
+        "form": _build_order_form_payload(
+            order_id,
+            slots=slots,
+            missing_fields=missing_fields,
+            recommended_missing=recommended_missing,
+        ),
+        "slots": slots,
+    }
+    result.update(_compact_dict(slots))
+    return result
 
 
 def _norm_lookup(value: str | None) -> str:
@@ -324,7 +623,7 @@ class ToolRegistry:
             ),
             "create_order": ToolDefinition(
                 name="create_order",
-                description=descriptions.get("create_order", "Create a new order draft."),
+                description=descriptions.get("create_order", "Create an order form payload."),
                 parameters={
                     "type": "object",
                     "properties": {
@@ -614,36 +913,30 @@ class ToolRegistry:
 
     def create_order(self, **kwargs: Any) -> dict[str, Any]:
         slots = canonicalize_slots(kwargs)
-        missing_fields = [field for field in ["num_client", "product"] if not slots.get(field)]
-        product_text = str(slots.get("product", "")).lower()
+        missing_fields = [field for field in _ORDER_REQUIRED_FIELDS if not slots.get(field)]
 
-        recommended_missing: list[str] = []
-        if not slots.get("material") and not slots.get("index"):
-            recommended_missing.append("material_or_index")
-        if not slots.get("diameter"):
-            recommended_missing.append("diameter")
-        if any(keyword in product_text for keyword in ["progressive", "bifocal", "top 28"]) and not slots.get("addition"):
-            recommended_missing.append("addition")
-        if any(slots.get(field) for field in ["od_sphere", "od_cyl", "od_axis"]) and not any(
-            slots.get(field) for field in ["og_sphere", "og_cyl", "og_axis"]
-        ):
-            recommended_missing.append("og_values_or_confirmation")
-        if any(slots.get(field) for field in ["og_sphere", "og_cyl", "og_axis"]) and not any(
-            slots.get(field) for field in ["od_sphere", "od_cyl", "od_axis"]
-        ):
-            recommended_missing.append("od_values_or_confirmation")
+        order_id = _order_id()
+        recommended_missing = _order_recommended_missing(slots)
 
         recap_items = _material_treatment_tokens(slots)
         recap = ", ".join(recap_items) if recap_items else "core request captured"
 
+        form_payload = _build_order_form_payload(
+            order_id,
+            slots=slots,
+            missing_fields=missing_fields,
+            recommended_missing=recommended_missing,
+        )
+
         result = {
-            "status": "collecting" if missing_fields else "draft",
-            "draft_id": _draft_id(),
+            "status": "form_required" if missing_fields else "ready",
+            "order_id": order_id,
             "submitted": False,
             "needs_confirmation": True,
             "missing_fields": missing_fields,
             "recommended_missing": recommended_missing,
             "recap": recap,
+            "form": form_payload,
         }
         result.update(_compact_dict(slots))
         return result
